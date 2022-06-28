@@ -1,3 +1,4 @@
+// Default websocket address
 const kWebSocketAddress = "wss://torpat.ch/poolparty/websockets";
 
 // All sockets, dead or alive.
@@ -11,18 +12,14 @@ const sleepMs = (interval) => new Promise(
 const consumeSockets = async (max) => {
   const nStart = sockets.size;
   for (let i = 0; i < max; ++i) {
-    try {
-      let socket = new WebSocket(kWebSocketAddress);
-      socket.onerror = (e) => {
-        //console.log(e);
-        if (socket.readyState === 3) {
-          sockets.delete(socket);
-        }
-      };
-      sockets.add(socket);
-    } catch (e) {
-      console.log("something went wrong");
-    }
+    let socket = new WebSocket(kWebSocketAddress);
+    socket.onerror = (e) => {
+      // console.log(e);
+      if (socket.readyState === 3) {
+        sockets.delete(socket);
+      }
+    };
+    sockets.add(socket);
   }
   await sleepMs(50);
   const nFinish = sockets.size;
@@ -41,17 +38,23 @@ const releaseSockets = async (max) => {
   return numberToDelete;
 };
 
-const count = document.getElementById("count");
-const consumeAllButton = document.getElementById("consumeAll");
-const releaseAllButton = document.getElementById("releaseAll");
-const consumeOneButton = document.getElementById("consumeOne");
-const releaseOneButton = document.getElementById("releaseOne");
-const consumed = document.getElementById("consumed");
+// Display elements
+const countDiv = document.getElementById("count");
+const consumedDiv = document.getElementById("consumed");
 
+// Update the display elements
 const update = (consumedCount) => {
   count.innerText = "I hold: " + sockets.size;
   consumed.innerText = "last consumed: " + consumedCount;
 };
+
+// Input elements
+const consumeOneButton = document.getElementById("consumeOne");
+const consumeAllButton = document.getElementById("consumeAll");
+const releaseOneButton = document.getElementById("releaseOne");
+const releaseAllButton = document.getElementById("releaseAll");
+
+// Wire up input elements:
 
 consumeAllButton.addEventListener("click", async (e) => {
   const consumedCount = await consumeSockets(300);

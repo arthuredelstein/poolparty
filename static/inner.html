@@ -4,15 +4,20 @@
     <meta charset="utf8" />
     <link rel="icon" href="data:;base64,=">
     <title>pool party websocket tests inner</title>
+    <style>
+     .display {
+       white-space: pre;
+       font-family: monospace;
+     }
+    </style>
   </head>
   <body>
     <button id="consumeOne">consume 1</button>
     <button id="consumeAll">consume all</button>
     <button id="releaseOne">release 1</button>
     <button id="releaseAll">release all</button>
-    <div id="count" style="white-space: pre; font-family: monospace;"></div>
-    <div id="consumed" style="white-space: pre; font-family: monospace;"></div>
-    </div>
+    <div class="display" id="count"></div>
+    <div class="display" id="consumed"></div>
     <script type="module" src="inner.js"></script>
   </body>
 </html>
