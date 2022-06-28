@@ -1,4 +1,4 @@
-const kWebSocketAddress = "wss://torpat.ch/pool-party/websockets";
+const kWebSocketAddress = "wss://torpat.ch/poolparty/websockets";
 
 // All sockets, dead or alive.
 let sockets = new Set();
@@ -7,56 +7,68 @@ let sockets = new Set();
 const sleepMs = (interval) => new Promise(
   resolve => setTimeout(resolve, interval));
 
-// Consume and count socket slots.
-const countAvailableSockets = async (max) => {
-  let errorCount = 0;
-  for (let i = 0; i < 300; ++i) {
+// Consume and return number consumed.
+const consumeSockets = async (max) => {
+  const nStart = sockets.size;
+  for (let i = 0; i < max; ++i) {
     try {
-      let socket = new WebSocket("wss://torpat.ch/pool-party/websockets");
-      socket.onerror = (e) => ++errorCount;
+      let socket = new WebSocket(kWebSocketAddress);
+      socket.onerror = (e) => {
+        //console.log(e);
+        if (socket.readyState === 3) {
+          sockets.delete(socket);
+        }
+      };
       sockets.add(socket);
     } catch (e) {
-      console.log("huh");
+      console.log("something went wrong");
     }
   }
   await sleepMs(50);
-  return max - errorCount;
+  const nFinish = sockets.size;
+  return nFinish - nStart;
 };
 
-/*const consumSockets = async(n) => {
-  for (let i = 0; i < n; ++i) {
-    try {
-*/
-
-const dumpDeadSockets = () => {
-  for (let socket of Array.from(sockets)) {
-    console.log(socket.readyState);
-    if (socket.readyState === 3) {
-      sockets.delete(socket);
-    }
-  }
-}
-
-const closeAllSockets = async () => {
-  dumpDeadSockets();
-  console.log(sockets);
-  for (let socket of Array.from(sockets)) {
+// Release and return number deleted
+const releaseSockets = async (max) => {
+  const numberToDelete = Math.min(max, sockets.size);
+  const doomedSockets = Array.from(sockets).slice(0, numberToDelete);
+  for (let socket of doomedSockets) {
     socket.close();
-    console.log("closed");
     sockets.delete(socket);
   }
-  console.log(sockets);
-}
-
-const resultsDiv = document.getElementById("results");
-
-
-resultsDiv.innerText = "";
-for (let i = 0; i < 3; ++i) {
-  const numberFound = await countAvailableSockets(300);
-  console.log(numberFound);
-//  closeAllSockets();
   await sleepMs(50);
-  console.log("done.");
-  resultsDiv.innerText += numberFound + "\n";
+  return numberToDelete;
 };
+
+const count = document.getElementById("count");
+const consumeAllButton = document.getElementById("consumeAll");
+const releaseAllButton = document.getElementById("releaseAll");
+const consumeOneButton = document.getElementById("consumeOne");
+const releaseOneButton = document.getElementById("releaseOne");
+const consumed = document.getElementById("consumed");
+
+const update = (consumedCount) => {
+  count.innerText = "I hold: " + sockets.size;
+  consumed.innerText = "last consumed: " + consumedCount;
+};
+
+consumeAllButton.addEventListener("click", async (e) => {
+  const consumedCount = await consumeSockets(300);
+  update(consumedCount);
+});
+
+consumeOneButton.addEventListener("click", async (e) => {
+  const consumedCount = await consumeSockets(1);
+  update(consumedCount);
+});
+
+releaseAllButton.addEventListener("click", async e => {
+  const consumedCount = - await releaseSockets(300);
+  update(consumedCount);
+});
+
+releaseOneButton.addEventListener("click", async e => {
+  const consumedCount = - await releaseSockets(1);
+  update(consumedCount);
+});
