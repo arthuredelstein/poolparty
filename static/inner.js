@@ -2,7 +2,7 @@
 const kWebSocketAddress = "wss://torpat.ch/poolparty/websockets";
 
 // All sockets, dead or alive.
-let sockets = new Set();
+const sockets = new Set();
 
 // Sleep for time specified by interval in ms.
 const sleepMs = (interval) => new Promise(
@@ -12,9 +12,9 @@ const sleepMs = (interval) => new Promise(
 const consumeSockets = async (max) => {
   const nStart = sockets.size;
   for (let i = 0; i < max; ++i) {
-    let socket = new WebSocket(kWebSocketAddress);
-    socket.onerror = (e) => {
-      // console.log(e);
+    const socket = new WebSocket(kWebSocketAddress);
+    socket.onerror = (_e) => {
+      // console.log(_e);
       if (socket.readyState === 3) {
         sockets.delete(socket);
       }
@@ -30,7 +30,7 @@ const consumeSockets = async (max) => {
 const releaseSockets = async (max) => {
   const numberToDelete = Math.min(max, sockets.size);
   const doomedSockets = Array.from(sockets).slice(0, numberToDelete);
-  for (let socket of doomedSockets) {
+  for (const socket of doomedSockets) {
     socket.close();
     sockets.delete(socket);
   }
@@ -38,14 +38,27 @@ const releaseSockets = async (max) => {
   return numberToDelete;
 };
 
+// Probe for empty slots
+const probe = async () => {
+  const consumedCount = await consumeSockets(300);
+  await releaseSockets(consumedCount);
+  return consumedCount;
+};
+
 // Display elements
 const countDiv = document.getElementById("count");
 const consumedDiv = document.getElementById("consumed");
+const probeFoundDiv = document.getElementById("probeFound");
 
 // Update the display elements
-const update = (consumedCount) => {
-  count.innerText = "I hold: " + sockets.size;
-  consumed.innerText = "last consumed: " + consumedCount;
+const update = ({ consumedCount, probeFound }) => {
+  countDiv.innerText = "I hold: " + sockets.size;
+  if (consumedDiv !== undefined) {
+    consumedDiv.innerText = "last consumed: " + consumedCount;
+  }
+  if (probeFound !== undefined) {
+    probeFoundDiv.innerText = "probe found: " + probeFound;
+  }
 };
 
 // Input elements
@@ -53,25 +66,31 @@ const consumeOneButton = document.getElementById("consumeOne");
 const consumeAllButton = document.getElementById("consumeAll");
 const releaseOneButton = document.getElementById("releaseOne");
 const releaseAllButton = document.getElementById("releaseAll");
+const probeButton = document.getElementById("probe");
 
 // Wire up input elements:
 
-consumeAllButton.addEventListener("click", async (e) => {
+consumeAllButton.addEventListener("click", async (_e) => {
   const consumedCount = await consumeSockets(300);
-  update(consumedCount);
+  update({ consumedCount });
 });
 
-consumeOneButton.addEventListener("click", async (e) => {
+consumeOneButton.addEventListener("click", async (_e) => {
   const consumedCount = await consumeSockets(1);
-  update(consumedCount);
+  update({ consumedCount });
 });
 
-releaseAllButton.addEventListener("click", async e => {
-  const consumedCount = - await releaseSockets(300);
-  update(consumedCount);
+releaseAllButton.addEventListener("click", async (_e) => {
+  const consumedCount = -await releaseSockets(300);
+  update({ consumedCount });
 });
 
-releaseOneButton.addEventListener("click", async e => {
-  const consumedCount = - await releaseSockets(1);
-  update(consumedCount);
+releaseOneButton.addEventListener("click", async (_e) => {
+  const consumedCount = -await releaseSockets(1);
+  update({ consumedCount });
+});
+
+probeButton.addEventListener("click", async (_e) => {
+  const probeFound = await probe();
+  update({ probeFound });
 });
