@@ -1,6 +1,8 @@
 // Default websocket address
 const kWebSocketAddress = "wss://torpat.ch/poolparty/websockets";
 
+const waitInterval = 0;
+
 // All sockets, dead or alive.
 const sockets = new Set();
 
@@ -21,7 +23,7 @@ const consumeSockets = async (max) => {
     };
     sockets.add(socket);
   }
-  await sleepMs(50);
+  await sleepMs(waitInterval);
   const nFinish = sockets.size;
   return nFinish - nStart;
 };
@@ -34,7 +36,7 @@ const releaseSockets = async (max) => {
     socket.close();
     sockets.delete(socket);
   }
-  await sleepMs(50);
+  await sleepMs(waitInterval);
   return numberToDelete;
 };
 
@@ -46,19 +48,22 @@ const probe = async () => {
 };
 
 // Display elements
-const countDiv = document.getElementById("count");
-const consumedDiv = document.getElementById("consumed");
-const probeFoundDiv = document.getElementById("probeFound");
+const logDiv = document.getElementById("log");
 
 // Update the display elements
-const update = ({ consumedCount, probeFound }) => {
-  countDiv.innerText = "I hold: " + sockets.size;
-  if (consumedDiv !== undefined) {
-    consumedDiv.innerText = "last consumed: " + consumedCount;
+const update = ({ consumedCount, probeFound, time }) => {
+  let message = "";
+  if (consumedCount !== undefined) {
+    message += "last consumed: " + consumedCount;
   }
   if (probeFound !== undefined) {
-    probeFoundDiv.innerText = "probe found: " + probeFound;
+    message += "probe found: " + probeFound;
   }
+  message += ", holding: " + sockets.size;
+  if (time !== undefined) {
+    message += ", time: " + time;
+  }
+  logDiv.innerText += message + "\n";
 };
 
 // Input elements
@@ -70,27 +75,31 @@ const probeButton = document.getElementById("probe");
 
 // Wire up input elements:
 
-consumeAllButton.addEventListener("click", async (_e) => {
-  const consumedCount = await consumeSockets(300);
-  update({ consumedCount });
-});
+const bindCommandToButton = (button, command, resultName) => {
+  button.addEventListener("click", async (_e) => {
+    const t1 = performance.now();
+    const result = await command();
+    const t2 = performance.now();
+    const resultObject = { time: t2 - t1 };
+    resultObject[resultName] = result;
+    update(resultObject);
+  });
+};
 
-consumeOneButton.addEventListener("click", async (_e) => {
-  const consumedCount = await consumeSockets(1);
-  update({ consumedCount });
-});
-
-releaseAllButton.addEventListener("click", async (_e) => {
-  const consumedCount = -await releaseSockets(300);
-  update({ consumedCount });
-});
-
-releaseOneButton.addEventListener("click", async (_e) => {
-  const consumedCount = -await releaseSockets(1);
-  update({ consumedCount });
-});
-
-probeButton.addEventListener("click", async (_e) => {
-  const probeFound = await probe();
-  update({ probeFound });
-});
+bindCommandToButton(
+  consumeOneButton,
+  () => consumeSockets(1),
+  "consumedCount");
+bindCommandToButton(
+  consumeAllButton,
+  () => consumeSockets(300),
+  "consumedCount");
+bindCommandToButton(
+  releaseOneButton,
+  async () => { return -await releaseSockets(1); },
+  "consumedCount");
+bindCommandToButton(
+  releaseAllButton,
+  async () => { return -await releaseSockets(300); },
+  "consumedCount");
+bindCommandToButton(probeButton, () => probe(), "probeFound");
