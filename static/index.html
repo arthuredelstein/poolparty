@@ -17,6 +17,11 @@
   </head>
   <body>
     <div>
-    <iframe src="https://torpat.ch/poolparty/inner.html"></iframe>
+      <iframe src="" id="inner"></iframe>
+      <script>
+       const iframe = document.getElementById("inner");
+       iframe.src = "https://poolparty.privacytests.org/inner.html" + window.location.search;
+      </script>
+    </div>
   </body>
 </html>

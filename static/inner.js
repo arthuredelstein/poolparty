@@ -1,13 +1,51 @@
 // Default websocket address
-const kWebSocketAddress = "wss://torpat.ch/poolparty/websockets";
+const kWebSocketAddress = "wss://poolparty.privacytests.org/websockets";
 
 const kSettlingTimeMs = 0;
 const kMaxValue = 128;
 const kPulseMs = 120;
-const kMaxSlots = 256;
+const kMaxSlots = 255;
+const kListSize = 5;
+
+const params = new URLSearchParams(window.location.search);
+const debug = params.get("debug") === "true";
 
 // All sockets, dead or alive.
 const sockets = new Set();
+
+// Convert a list of small integers to a big integer
+const listToBigInteger = (list) => {
+  let result = 0;
+  for (let i = kListSize - 1; i >= 0; --i) {
+    result = result * kMaxValue + list[i];
+  }
+  return result;
+};
+
+// Convert a big integer to a list of small integers
+const bigIntegerToList = (bigInteger) => {
+  const list = [];
+  let feed = bigInteger;
+  for (let i = 0; i < kListSize; ++i) {
+    const remainder = feed % kMaxValue;
+    list.push(remainder);
+    feed = (feed - remainder) / kMaxValue;
+  }
+  return list;
+};
+
+// Convert a big integer to a hexadecimal string
+const bigIntegerToHex = (bigInteger) => {
+  const nBits = kListSize * Math.log(kMaxValue) / Math.log(2);
+  const nHexDigits = Math.ceil(nBits / 4);
+  return (bigInteger + Math.pow(16, nHexDigits)).toString(16).slice(1);
+};
+
+// Generate a random big integer for sending between tabs.
+const randomBigInteger = () => {
+  const nBits = kListSize * Math.log(kMaxValue) / Math.log(2);
+  return Math.floor(Math.random() * Math.pow(2, nBits));
+};
 
 // Sleep for time specified by interval in ms.
 const sleepMs = (interval) => new Promise(
@@ -56,22 +94,31 @@ const probe = async (max) => {
 // Return true if we have taken the sender role;
 // false if we are a receiver.
 const isSender = async () => {
-  const found = await consumeSockets(kMaxSlots);
-  return found > 128;
+  await consumeSockets(kMaxSlots);
+  if (sockets.size < 128) {
+    await releaseSockets(kMaxSlots);
+    return false;
+  } else {
+    await sleepMs(100);
+    // Grab the remaining sockets.
+    await consumeSockets(kMaxSlots - sockets.size);
+    return true;
+  }
 };
 
-// Send n random integers.
-const sendIntegers = async (n) => {
-  const integerList = [];
-  await consumeSockets(kMaxSlots);
+// Send a random big integer.
+const sendInteger = async (bigInteger) => {
+  const list = bigIntegerToList(bigInteger);
+  if (sockets.size < kMaxSlots) {
+    throw new Error("sender should be holding all slots");
+  }
   const startTime = performance.now();
   let lastInteger = 0;
-  for (let i = 0; i < n; ++i) {
+  for (let i = 0; i < kListSize; ++i) {
     // At the beginng of each pulse, either consume
     // or release slots so that, for the rest of the pulse,
     // exactly `integer + 1` slots are unheld.
-    const integer = 1 + Math.floor(Math.random() * kMaxValue);
-    integerList.push(integer - 1);
+    const integer = 1 + list[i];
     const delta = integer - lastInteger;
     lastInteger = integer;
     if (delta > 0) {
@@ -79,15 +126,24 @@ const sendIntegers = async (n) => {
     } else {
       await consumeSockets(-delta);
     }
-    const remainingTime = startTime + (i + 1) * kPulseMs - performance.now();
-    await sleepMs(Math.max(0, remainingTime));
+    if (i < kListSize - 1) {
+      const remainingTime = startTime + (i + 1) * kPulseMs - performance.now();
+      await sleepMs(Math.max(0, remainingTime));
+    }
   }
-  await consumeSockets(kMaxSlots);
-  return integerList;
+  if (debug) {
+    log(list);
+  }
+//  await consumeSockets(lastInteger);
+  return bigIntegerToHex(bigInteger);
 };
 
-// Receive n integers.
-const receiveIntegers = async (n) => {
+// Receive big integer.
+const receiveInteger = async () => {
+  if (sockets.size > 0) {
+    log("error!", 0);
+    throw new Error("receiver should not be holding slots");
+  }
   // We assume the sender holds all slots before
   // signalling starts. Wait for any open slots
   // to appear, to indicate that signalling has begun.
@@ -107,13 +163,18 @@ const receiveIntegers = async (n) => {
   const startTime = performance.now();
   // Read n integers by probing for
   // unheld slots.
-  for (let i = 0; i < n; ++i) {
+  for (let i = 0; i < kListSize; ++i) {
     const integer = await probe(kMaxValue);
     integerList.push(integer - 1);
     const remainingTime = startTime + (i + 1) * kPulseMs - performance.now();
-    await sleepMs(remainingTime);
+    if (i < kListSize - 1) {
+      await sleepMs(remainingTime);
+    }
   }
-  return integerList;
+  if (debug) {
+    log(integerList);
+  }
+  return bigIntegerToHex(listToBigInteger(integerList));
 };
 
 // A div containing a log of work done
@@ -122,7 +183,43 @@ const logDiv = document.getElementById("log");
 // Add a message to log, included elapsed time and
 // how many slots we are holding.
 const log = (msg, elapsedMs) => {
-  logDiv.innerText += `${msg}, elapsed, ms: ${elapsedMs}, holding: ${sockets.size}\n`;
+  let text = Math.round(performance.now()/10)/100 + " | " + msg;
+  if (elapsedMs !== undefined) {
+    text += `, elapsed, ms: ${elapsedMs}`;
+  }
+  text += `, holding: ${sockets.size}\n`;
+  logDiv.innerText += text;
+};
+
+// Wait until the next second begins according to
+// the system clock.
+const sleepUntilNextRoundInterval = async (interval) => {
+  const now = Date.now();
+  const remainingMs = Math.ceil(now / interval) * interval - now;
+  await sleepMs(remainingMs);
+};
+
+// When page loads
+const run = async () => {
+  while (true) {
+    await sleepUntilNextRoundInterval(1000, 0);
+    const t0 = performance.now();
+    const sender = await isSender();
+    const deltaMs = 200 + t0 - performance.now();
+    await sleepMs(deltaMs);
+    if (sender) {
+      await sleepMs(100);
+      const t1 = performance.now();
+      const resultList = await sendInteger(randomBigInteger());
+      const t2 = performance.now();
+      log(`send: ${resultList}`, t2 - t1);
+    } else {
+      const t1 = performance.now();
+      const resultList = await receiveInteger();
+      const t2 = performance.now();
+      log(`receive: ${resultList}`, t2 - t1);
+    }
+  }
 };
 
 // A div containing the command buttons.
@@ -150,35 +247,11 @@ const createAllCommandButtons = () => {
   createButtonForCommand("release all", () => releaseSockets(kMaxSlots));
   createButtonForCommand("probe", () => probe(kMaxSlots));
   createButtonForCommand("is sender", isSender);
-  createButtonForCommand("send", () => sendIntegers(5));
-  createButtonForCommand("receive", () => receiveIntegers(5));
+  createButtonForCommand("send", () => sendInteger(randomBigInteger()));
+  createButtonForCommand("receive", () => receiveInteger());
 };
 
-createAllCommandButtons();
-
-const t0 = performance.now();
-const sender = await isSender();
-if (sender) {
-  await consumeSockets(kMaxSlots);
-  while (true) {
-    await releaseSockets(1);
-    const consumed = await consumeSockets(1);
-    if (consumed === 0) {
-      break;
-    }
-  }
-  await sleepMs(100);
-  await consumeSockets(1);
-  const t1 = performance.now();
-  const resultList = await sendIntegers(5);
-  const t2 = performance.now();
-  await releaseSockets(kMaxSlots);
-  log(`send: ${resultList}`, t2 - t1);
-} else {
-  await consumeSockets(1);
-  await sleepMs(100);
-  await releaseSockets(kMaxSlots);
-  const t1 = performance.now();
-  const resultList = await receiveIntegers(5);
-  log(`receive: ${resultList}`, t1 - t0);
+if (debug) {
+  createAllCommandButtons();
 }
+run();
