@@ -88,7 +88,7 @@ const sendIntegers = async (n) => {
 
 // Receive n integers.
 const receiveIntegers = async (n) => {
-  // We assume the sender holds all slot before
+  // We assume the sender holds all slots before
   // signalling starts. Wait for any open slots
   // to appear, to indicate that signalling has begun.
   let consumed;
