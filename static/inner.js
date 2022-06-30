@@ -2,6 +2,8 @@
 const kWebSocketAddress = "wss://torpat.ch/poolparty/websockets";
 
 const waitInterval = 0;
+const kMaxValue = 128;
+const stepMs = 120;
 
 // All sockets, dead or alive.
 const sockets = new Set();
@@ -55,15 +57,13 @@ const amISender = async () => {
   return found > 128;
 };
 
-const step = 100;
-
 const sendIntegers = async (n) => {
   const integerList = [];
   await consumeSockets(300);
   const startTime = performance.now();
   let lastInteger = 0;
   for (let i = 0; i < n; ++i) {
-    const integer = 1 + Math.floor(Math.random() * 64);
+    const integer = 1 + Math.floor(Math.random() * kMaxValue);
     integerList.push(integer - 1);
     const delta = integer - lastInteger;
     lastInteger = integer;
@@ -73,7 +73,7 @@ const sendIntegers = async (n) => {
     } else {
       await consumeSockets(-delta);
     }
-    const remainingTime = startTime + (i+1) * step - performance.now();
+    const remainingTime = startTime + (i+1) * stepMs - performance.now();
     console.log("sent:", integer - 1, Date.now());
     await sleepMs(Math.max(0, remainingTime));
   }
@@ -92,14 +92,14 @@ const receiveIntegers = async (n) => {
   }
   await releaseSockets(consumed);
   console.log("start detected");
-  await sleepMs(50);
+  await sleepMs(stepMs/2);
   const integerList = [];
   let startTime = performance.now();
   for (let i = 0; i < n; ++i) {
-    const integer = await probe(64);
+    const integer = await probe(kMaxValue);
     integerList.push(integer-1);
     console.log("received:", integer-1, Date.now());
-    const remainingTime = startTime + (i+1) * step - performance.now();
+    const remainingTime = startTime + (i+1) * stepMs - performance.now();
     console.log({remainingTime});
     await sleepMs(remainingTime);
   }
@@ -180,9 +180,9 @@ bindCommandToButton(
   "role");
 bindCommandToButton(
   sendIntegersButton,
-  () => sendIntegers(6),
+  () => sendIntegers(5),
   "sent");
 bindCommandToButton(
   receiveIntegersButton,
-  () => receiveIntegers(6),
+  () => receiveIntegers(5),
   "received");
