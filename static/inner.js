@@ -30,6 +30,9 @@ const consumeSockets = async (max) => {
 
 // Release and return number deleted
 const releaseSockets = async (max) => {
+  if (max === 0) {
+    return 0;
+  }
   const numberToDelete = Math.min(max, sockets.size);
   const doomedSockets = Array.from(sockets).slice(0, numberToDelete);
   for (const socket of doomedSockets) {
@@ -41,23 +44,88 @@ const releaseSockets = async (max) => {
 };
 
 // Probe for empty slots
-const probe = async () => {
-  const consumedCount = await consumeSockets(300);
+const probe = async (max) => {
+  const consumedCount = await consumeSockets(max);
   await releaseSockets(consumedCount);
   return consumedCount;
+};
+
+const amISender = async () => {
+  const found = await consumeSockets(300);
+  return found > 128;
+};
+
+const step = 100;
+
+const sendIntegers = async (n) => {
+  const integerList = [];
+  await consumeSockets(300);
+  const startTime = performance.now();
+  let lastInteger = 0;
+  for (let i = 0; i < n; ++i) {
+    const integer = 1 + Math.floor(Math.random() * 64);
+    integerList.push(integer - 1);
+    const delta = integer - lastInteger;
+    lastInteger = integer;
+    console.log(delta);
+    if (delta > 0) {
+      await releaseSockets(delta);
+    } else {
+      await consumeSockets(-delta);
+    }
+    const remainingTime = startTime + (i+1) * step - performance.now();
+    console.log("sent:", integer - 1, Date.now());
+    await sleepMs(Math.max(0, remainingTime));
+  }
+  await consumeSockets(300);
+  return integerList;
+};
+
+const receiveIntegers = async (n) => {
+  let startTime2 = performance.now();
+  let consumed;
+  while (true) {
+    consumed = await consumeSockets(1);
+    if (consumed > 0) {
+      break;
+    }
+  }
+  await releaseSockets(consumed);
+  console.log("start detected");
+  await sleepMs(50);
+  const integerList = [];
+  let startTime = performance.now();
+  for (let i = 0; i < n; ++i) {
+    const integer = await probe(64);
+    integerList.push(integer-1);
+    console.log("received:", integer-1, Date.now());
+    const remainingTime = startTime + (i+1) * step - performance.now();
+    console.log({remainingTime});
+    await sleepMs(remainingTime);
+  }
+  return integerList;
 };
 
 // Display elements
 const logDiv = document.getElementById("log");
 
 // Update the display elements
-const update = ({ consumedCount, probeFound, time }) => {
+const update = ({ consumedCount, probeFound, role, sent, received, time }) => {
   let message = "";
   if (consumedCount !== undefined) {
     message += "last consumed: " + consumedCount;
   }
   if (probeFound !== undefined) {
     message += "probe found: " + probeFound;
+  }
+  if (role !== undefined) {
+    message += "role: " + role;
+  }
+  if (sent !== undefined) {
+    message += "sent: " + sent;
+  }
+  if (received !== undefined) {
+    message += "received: " + received;
   }
   message += ", holding: " + sockets.size;
   if (time !== undefined) {
@@ -72,6 +140,9 @@ const consumeAllButton = document.getElementById("consumeAll");
 const releaseOneButton = document.getElementById("releaseOne");
 const releaseAllButton = document.getElementById("releaseAll");
 const probeButton = document.getElementById("probe");
+const roleButton = document.getElementById("role");
+const sendIntegersButton = document.getElementById("sendIntegers");
+const receiveIntegersButton = document.getElementById("receiveIntegers");
 
 // Wire up input elements:
 
@@ -102,4 +173,16 @@ bindCommandToButton(
   releaseAllButton,
   async () => { return -await releaseSockets(300); },
   "consumedCount");
-bindCommandToButton(probeButton, () => probe(), "probeFound");
+bindCommandToButton(probeButton, () => probe(300), "probeFound");
+bindCommandToButton(
+  roleButton,
+  async () => { return await amISender() ? "sender" : "receiver"; },
+  "role");
+bindCommandToButton(
+  sendIntegersButton,
+  () => sendIntegers(6),
+  "sent");
+bindCommandToButton(
+  receiveIntegersButton,
+  () => receiveIntegers(6),
+  "received");
