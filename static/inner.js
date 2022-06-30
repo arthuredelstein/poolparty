@@ -13,6 +13,9 @@ const debug = params.get("debug") === "true";
 // All sockets, dead or alive.
 const sockets = new Set();
 
+// Round to the nearest 1000th of a second and express in seconds
+const roundTime = (timeMs) => Math.round(timeMs/10)/100;
+
 // Convert a list of small integers to a big integer
 const listToBigInteger = (list) => {
   let result = 0;
@@ -183,12 +186,13 @@ const logDiv = document.getElementById("log");
 // Add a message to log, included elapsed time and
 // how many slots we are holding.
 const log = (msg, elapsedMs) => {
-  let text = Math.round(performance.now()/10)/100 + " | " + msg;
+  let text = roundTime(performance.now()) + " | " + msg;
   if (elapsedMs !== undefined) {
-    text += `, elapsed, ms: ${elapsedMs}`;
+    text += `, elapsed, ms: ${Math.round(elapsedMs)}`;
   }
   text += `, holding: ${sockets.size}\n`;
   logDiv.innerText += text;
+  window.scrollBy(0, logDiv.scrollHeight);
 };
 
 // Wait until the next second begins according to
