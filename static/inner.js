@@ -1,9 +1,9 @@
 // Default websocket address
 const kWebSocketAddress = "wss://torpat.ch/poolparty/websockets";
 
-const waitInterval = 0;
+const kSettlingTimeMs = 0;
 const kMaxValue = 128;
-const stepMs = 120;
+const kPulseMs = 120;
 const kMaxSlots = 256;
 
 // All sockets, dead or alive.
@@ -26,12 +26,12 @@ const consumeSockets = async (max) => {
     };
     sockets.add(socket);
   }
-  await sleepMs(waitInterval);
+  await sleepMs(kSettlingTimeMs);
   const nFinish = sockets.size;
   return nFinish - nStart;
 };
 
-// Release and return number deleted
+// Release and return number deleted.
 const releaseSockets = async (max) => {
   if (max === 0) {
     return 0;
@@ -42,47 +42,55 @@ const releaseSockets = async (max) => {
     socket.close();
     sockets.delete(socket);
   }
-  await sleepMs(waitInterval);
+  await sleepMs(kSettlingTimeMs);
   return numberToDelete;
 };
 
-// Probe for empty slots
+// Probe for unheld slots.
 const probe = async (max) => {
   const consumedCount = await consumeSockets(max);
   await releaseSockets(consumedCount);
   return consumedCount;
 };
 
-const amISender = async () => {
+// Return true if we have taken the sender role;
+// false if we are a receiver.
+const isSender = async () => {
   const found = await consumeSockets(kMaxSlots);
   return found > 128;
 };
 
+// Send n random integers.
 const sendIntegers = async (n) => {
   const integerList = [];
   await consumeSockets(kMaxSlots);
   const startTime = performance.now();
   let lastInteger = 0;
   for (let i = 0; i < n; ++i) {
+    // At the beginng of each pulse, either consume
+    // or release slots so that, for the rest of the pulse,
+    // exactly `integer + 1` slots are unheld.
     const integer = 1 + Math.floor(Math.random() * kMaxValue);
     integerList.push(integer - 1);
     const delta = integer - lastInteger;
     lastInteger = integer;
-    console.log(delta);
     if (delta > 0) {
       await releaseSockets(delta);
     } else {
       await consumeSockets(-delta);
     }
-    const remainingTime = startTime + (i + 1) * stepMs - performance.now();
-    console.log("sent:", integer - 1, Date.now());
+    const remainingTime = startTime + (i + 1) * kPulseMs - performance.now();
     await sleepMs(Math.max(0, remainingTime));
   }
   await consumeSockets(kMaxSlots);
   return integerList;
 };
 
+// Receive n integers.
 const receiveIntegers = async (n) => {
+  // We assume the sender holds all slot before
+  // signalling starts. Wait for any open slots
+  // to appear, to indicate that signalling has begun.
   let consumed;
   while (true) {
     consumed = await consumeSockets(1);
@@ -91,54 +99,65 @@ const receiveIntegers = async (n) => {
     }
   }
   await releaseSockets(consumed);
-  console.log("start detected");
-  await sleepMs(stepMs / 2);
+  // Signalling has begun. Delay reading by
+  // half a pulse interval so that we probe for
+  // the integer in the middle of each pulse.
+  await sleepMs(kPulseMs / 2);
   const integerList = [];
   const startTime = performance.now();
+  // Read n integers by probing for
+  // unheld slots.
   for (let i = 0; i < n; ++i) {
     const integer = await probe(kMaxValue);
     integerList.push(integer - 1);
-    console.log("received:", integer - 1, Date.now());
-    const remainingTime = startTime + (i + 1) * stepMs - performance.now();
-    console.log({ remainingTime });
+    const remainingTime = startTime + (i + 1) * kPulseMs - performance.now();
     await sleepMs(remainingTime);
   }
   return integerList;
 };
 
-// Display elements
+// A div containing a log of work done
 const logDiv = document.getElementById("log");
 
-// Input elements
+// Add a message to log, included elapsed time and
+// how many slots we are holding.
+const log = (msg, elapsedMs) => {
+  logDiv.innerText += `${msg}, elapsed, ms: ${elapsedMs}, holding: ${sockets.size}\n`;
+};
+
+// A div containing the command buttons.
 const commandButtonsDiv = document.getElementById("commandButtons");
 
-// Wire up input elements:
-
+// Create a command button wired to command.
 const createButtonForCommand = (commandName, commandFunction) => {
-  let button = document.createElement("button");
-  button.id = "button-" + commandName.replace(" ", "-");;
+  const button = document.createElement("button");
+  button.id = "button-" + commandName.replace(" ", "-"); ;
   button.innerText = commandName;
   button.addEventListener("click", async (_e) => {
     const t1 = performance.now();
     const result = await commandFunction();
     const t2 = performance.now();
-    const resultObject = { time: t2 - t1 };
-    logDiv.innerText += `${commandName}: ${result}, time: ${t2-t1}, holding: ${sockets.size}\n`;
+    log(`${commandName}: ${result}`, t2 - t1);
   });
-  commandButtons.appendChild(button);
+  commandButtonsDiv.appendChild(button);
 };
 
-createButtonForCommand("consume 1", () => consumeSockets(1));
-createButtonForCommand("consume all", () => consumeSockets(kMaxSlots));
-createButtonForCommand("release 1", () => releaseSockets(1));
-createButtonForCommand("release all", () => releaseSockets(kMaxSlots));
-createButtonForCommand("probe", () => probe(kMaxSlots));
-createButtonForCommand("is sender", amISender);
-createButtonForCommand("send", () => sendIntegers(5));
-createButtonForCommand("receive", () => receiveIntegers(5));
+// Create all the command buttons.
+const createAllCommandButtons = () => {
+  createButtonForCommand("consume 1", () => consumeSockets(1));
+  createButtonForCommand("consume all", () => consumeSockets(kMaxSlots));
+  createButtonForCommand("release 1", () => releaseSockets(1));
+  createButtonForCommand("release all", () => releaseSockets(kMaxSlots));
+  createButtonForCommand("probe", () => probe(kMaxSlots));
+  createButtonForCommand("is sender", isSender);
+  createButtonForCommand("send", () => sendIntegers(5));
+  createButtonForCommand("receive", () => receiveIntegers(5));
+};
+
+createAllCommandButtons();
 
 const t0 = performance.now();
-let sender = await amISender();
+const sender = await isSender();
 if (sender) {
   await consumeSockets(kMaxSlots);
   while (true) {
@@ -151,16 +170,15 @@ if (sender) {
   await sleepMs(100);
   await consumeSockets(1);
   const t1 = performance.now();
-  console.log("prep: ", t1);
   const resultList = await sendIntegers(5);
   const t2 = performance.now();
   await releaseSockets(kMaxSlots);
-  logDiv.innerText += "send: " + resultList + ", time, ms: " + (t2 - t1) + "\n";
+  log(`send: ${resultList}`, t2 - t1);
 } else {
   await consumeSockets(1);
   await sleepMs(100);
   await releaseSockets(kMaxSlots);
   const t1 = performance.now();
   const resultList = await receiveIntegers(5);
-  logDiv.innerText += "received: " + resultList + ", prep time, ms:" + (t1 - t0) + "\n";
+  log(`receive: ${resultList}`, t1 - t0);
 }
