@@ -73,7 +73,7 @@ const sendIntegers = async (n) => {
     } else {
       await consumeSockets(-delta);
     }
-    const remainingTime = startTime + (i+1) * stepMs - performance.now();
+    const remainingTime = startTime + (i + 1) * stepMs - performance.now();
     console.log("sent:", integer - 1, Date.now());
     await sleepMs(Math.max(0, remainingTime));
   }
@@ -82,7 +82,6 @@ const sendIntegers = async (n) => {
 };
 
 const receiveIntegers = async (n) => {
-  let startTime2 = performance.now();
   let consumed;
   while (true) {
     consumed = await consumeSockets(1);
@@ -92,15 +91,15 @@ const receiveIntegers = async (n) => {
   }
   await releaseSockets(consumed);
   console.log("start detected");
-  await sleepMs(stepMs/2);
+  await sleepMs(stepMs / 2);
   const integerList = [];
-  let startTime = performance.now();
+  const startTime = performance.now();
   for (let i = 0; i < n; ++i) {
     const integer = await probe(kMaxValue);
-    integerList.push(integer-1);
-    console.log("received:", integer-1, Date.now());
-    const remainingTime = startTime + (i+1) * stepMs - performance.now();
-    console.log({remainingTime});
+    integerList.push(integer - 1);
+    console.log("received:", integer - 1, Date.now());
+    const remainingTime = startTime + (i + 1) * stepMs - performance.now();
+    console.log({ remainingTime });
     await sleepMs(remainingTime);
   }
   return integerList;
