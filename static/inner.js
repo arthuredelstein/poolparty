@@ -6,6 +6,7 @@ const kMaxValue = 128;
 const kPulseMs = 120;
 const kMaxSlots = 255;
 const kListSize = 5;
+const kNumBits = kListSize * Math.log(kMaxValue) / Math.log(2);
 
 const params = new URLSearchParams(window.location.search);
 const debug = params.get("debug") === "true";
@@ -14,7 +15,7 @@ const debug = params.get("debug") === "true";
 const sockets = new Set();
 
 // Round to the nearest 1000th of a second and express in seconds
-const roundTime = (timeMs) => Math.round(timeMs/10)/100;
+const roundTime = (timeMs) => Math.round(timeMs / 10) / 100;
 
 // Convert a list of small integers to a big integer
 const listToBigInteger = (list) => {
@@ -39,20 +40,22 @@ const bigIntegerToList = (bigInteger) => {
 
 // Convert a big integer to a hexadecimal string
 const bigIntegerToHex = (bigInteger) => {
-  const nBits = kListSize * Math.log(kMaxValue) / Math.log(2);
-  const nHexDigits = Math.ceil(nBits / 4);
+  const nHexDigits = Math.ceil(kNumBits / 4);
   return (bigInteger + Math.pow(16, nHexDigits)).toString(16).slice(1);
 };
 
 // Generate a random big integer for sending between tabs.
-const randomBigInteger = () => {
-  const nBits = kListSize * Math.log(kMaxValue) / Math.log(2);
-  return Math.floor(Math.random() * Math.pow(2, nBits));
-};
+const randomBigInteger = () => Math.floor(Math.random() * Math.pow(2, kNumBits));
 
 // Sleep for time specified by interval in ms.
 const sleepMs = (interval) => new Promise(
   resolve => setTimeout(resolve, interval));
+
+// Sleep until a time in the future relative to `Date.now()`.
+const sleepUntil = async (timeMs) => {
+  await sleepMs(timeMs - Date.now());
+  return Date.now();
+};
 
 // Consume and return number consumed.
 const consumeSockets = async (max) => {
@@ -109,13 +112,13 @@ const isSender = async () => {
   }
 };
 
-// Send a random big integer.
+// Send a big integer.
 const sendInteger = async (bigInteger) => {
   const list = bigIntegerToList(bigInteger);
   if (sockets.size < kMaxSlots) {
     throw new Error("sender should be holding all slots");
   }
-  const startTime = performance.now();
+  const startTime = Date.now();
   let lastInteger = 0;
   for (let i = 0; i < kListSize; ++i) {
     // At the beginng of each pulse, either consume
@@ -130,18 +133,17 @@ const sendInteger = async (bigInteger) => {
       await consumeSockets(-delta);
     }
     if (i < kListSize - 1) {
-      const remainingTime = startTime + (i + 1) * kPulseMs - performance.now();
-      await sleepMs(Math.max(0, remainingTime));
+      await sleepUntil(startTime + (i + 1) * kPulseMs);
     }
   }
   if (debug) {
     log(list);
   }
-//  await consumeSockets(lastInteger);
+  //  await consumeSockets(lastInteger);
   return bigIntegerToHex(bigInteger);
 };
 
-// Receive big integer.
+// Receive a big integer.
 const receiveInteger = async () => {
   if (sockets.size > 0) {
     log("error!", 0);
@@ -163,15 +165,14 @@ const receiveInteger = async () => {
   // the integer in the middle of each pulse.
   await sleepMs(kPulseMs / 2);
   const integerList = [];
-  const startTime = performance.now();
+  const startTime = Date.now();
   // Read n integers by probing for
   // unheld slots.
   for (let i = 0; i < kListSize; ++i) {
     const integer = await probe(kMaxValue);
     integerList.push(integer - 1);
-    const remainingTime = startTime + (i + 1) * kPulseMs - performance.now();
     if (i < kListSize - 1) {
-      await sleepMs(remainingTime);
+      await sleepUntil(startTime + (i + 1) * kPulseMs);
     }
   }
   if (debug) {
@@ -198,19 +199,15 @@ const log = (msg, elapsedMs) => {
 // Wait until the next second begins according to
 // the system clock.
 const sleepUntilNextRoundInterval = async (interval) => {
-  const now = Date.now();
-  const remainingMs = Math.ceil(now / interval) * interval - now;
-  await sleepMs(remainingMs);
+  return sleepUntil(Math.ceil(Date.now() / interval) * interval);
 };
 
 // When page loads
 const run = async () => {
   while (true) {
-    await sleepUntilNextRoundInterval(1000, 0);
-    const t0 = performance.now();
+    const t0 = await sleepUntilNextRoundInterval(1000, 0);
     const sender = await isSender();
-    const deltaMs = 200 + t0 - performance.now();
-    await sleepMs(deltaMs);
+    await sleepUntil(200 + t0);
     if (sender) {
       await sleepMs(100);
       const t1 = performance.now();
