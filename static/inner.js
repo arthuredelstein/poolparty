@@ -1,11 +1,12 @@
 // Default websocket address
 const kWebSocketAddress = "wss://poolparty.privacytests.org/websockets";
 
-const kSettlingTimeMs = 0;
-const kMaxValue = 128;
-const kPulseMs = 120;
-const kMaxSlots = 255;
 const kListSize = 5;
+const kMaxSlots = 255;
+const kMaxValue = 128;
+const kPulseMs = 50;
+const kSettlingTimeMs = 1;
+
 const kNumBits = kListSize * Math.log(kMaxValue) / Math.log(2);
 
 const params = new URLSearchParams(window.location.search);
@@ -14,8 +15,14 @@ const debug = params.get("debug") === "true";
 // All sockets, dead or alive.
 const sockets = new Set();
 
+let trace = [];
+
+const recordStateToTrace = () => {
+  trace.push([Date.now(), sockets.size]);
+};
+
 // Round to the nearest 1000th of a second and express in seconds
-const roundTime = (timeMs) => Math.round(timeMs / 10) / 100;
+const roundTime = (timeMs) => Math.round(timeMs) / 1000;
 
 // Convert a list of small integers to a big integer
 const listToBigInteger = (list) => {
@@ -59,6 +66,7 @@ const sleepUntil = async (timeMs) => {
 
 // Consume and return number consumed.
 const consumeSockets = async (max) => {
+  recordStateToTrace();
   const nStart = sockets.size;
   for (let i = 0; i < max; ++i) {
     const socket = new WebSocket(kWebSocketAddress);
@@ -66,17 +74,21 @@ const consumeSockets = async (max) => {
       // console.log(_e);
       if (socket.readyState === 3) {
         sockets.delete(socket);
+        recordStateToTrace();
       }
     };
     sockets.add(socket);
+    recordStateToTrace();
   }
   await sleepMs(kSettlingTimeMs);
   const nFinish = sockets.size;
+  recordStateToTrace();
   return nFinish - nStart;
 };
 
 // Release and return number deleted.
 const releaseSockets = async (max) => {
+  recordStateToTrace();
   if (max === 0) {
     return 0;
   }
@@ -85,8 +97,10 @@ const releaseSockets = async (max) => {
   for (const socket of doomedSockets) {
     socket.close();
     sockets.delete(socket);
+    recordStateToTrace();
   }
   await sleepMs(kSettlingTimeMs);
+  recordStateToTrace();
   return numberToDelete;
 };
 
@@ -101,26 +115,21 @@ const probe = async (max) => {
 // false if we are a receiver.
 const isSender = async () => {
   await consumeSockets(kMaxSlots);
+  // log(`sockets.size: ${sockets.size}`);
   if (sockets.size < 128) {
     await releaseSockets(kMaxSlots);
     return false;
   } else {
-    await sleepMs(100);
-    // Grab the remaining sockets.
-    await consumeSockets(kMaxSlots - sockets.size);
     return true;
   }
 };
 
 // Send a big integer.
-const sendInteger = async (bigInteger) => {
+const sendInteger = async (bigInteger, startTime) => {
   const list = bigIntegerToList(bigInteger);
-  if (sockets.size < kMaxSlots) {
-    throw new Error("sender should be holding all slots");
-  }
-  const startTime = Date.now();
-  let lastInteger = 0;
+  let lastInteger = kMaxSlots - sockets.size;
   for (let i = 0; i < kListSize; ++i) {
+    await sleepUntil(startTime + (i + 1) * kPulseMs);
     // At the beginng of each pulse, either consume
     // or release slots so that, for the rest of the pulse,
     // exactly `integer + 1` slots are unheld.
@@ -132,48 +141,22 @@ const sendInteger = async (bigInteger) => {
     } else {
       await consumeSockets(-delta);
     }
-    if (i < kListSize - 1) {
-      await sleepUntil(startTime + (i + 1) * kPulseMs);
-    }
   }
   if (debug) {
     log(list);
   }
-  //  await consumeSockets(lastInteger);
   return bigIntegerToHex(bigInteger);
 };
 
 // Receive a big integer.
-const receiveInteger = async () => {
-  if (sockets.size > 0) {
-    log("error!", 0);
-    throw new Error("receiver should not be holding slots");
-  }
-  // We assume the sender holds all slots before
-  // signalling starts. Wait for any open slots
-  // to appear, to indicate that signalling has begun.
-  let consumed;
-  while (true) {
-    consumed = await consumeSockets(1);
-    if (consumed > 0) {
-      break;
-    }
-  }
-  await releaseSockets(consumed);
-  // Signalling has begun. Delay reading by
-  // half a pulse interval so that we probe for
-  // the integer in the middle of each pulse.
-  await sleepMs(kPulseMs / 2);
+const receiveInteger = async (startTime) => {
   const integerList = [];
-  const startTime = Date.now();
   // Read n integers by probing for
   // unheld slots.
   for (let i = 0; i < kListSize; ++i) {
+    await sleepUntil(startTime + (i + 1.25) * kPulseMs);
     const integer = await probe(kMaxValue);
     integerList.push(integer - 1);
-    if (i < kListSize - 1) {
-      await sleepUntil(startTime + (i + 1) * kPulseMs);
-    }
   }
   if (debug) {
     log(integerList);
@@ -204,23 +187,26 @@ const sleepUntilNextRoundInterval = async (interval) => {
 
 // When page loads
 const run = async () => {
-  while (true) {
-    const t0 = await sleepUntilNextRoundInterval(1000, 0);
+  trace = [];
+  for (let i = 0; i < 20; ++i) {
+    recordStateToTrace();
+    const t0 = await sleepUntilNextRoundInterval((1 + kListSize) * kPulseMs);
+    recordStateToTrace();
     const sender = await isSender();
-    await sleepUntil(200 + t0);
     if (sender) {
-      await sleepMs(100);
       const t1 = performance.now();
-      const resultList = await sendInteger(randomBigInteger());
+      const resultList = await sendInteger(randomBigInteger(), t0);
       const t2 = performance.now();
       log(`send: ${resultList}`, t2 - t1);
     } else {
       const t1 = performance.now();
-      const resultList = await receiveInteger();
+      const resultList = await receiveInteger(t0);
       const t2 = performance.now();
       log(`receive: ${resultList}`, t2 - t1);
     }
   }
+  recordStateToTrace();
+  console.log(JSON.stringify(trace));
 };
 
 // A div containing the command buttons.
