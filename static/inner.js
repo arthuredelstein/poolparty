@@ -1,13 +1,33 @@
 // Default websocket address
 const kWebSocketAddress = "wss://poolparty.privacytests.org/websockets";
 
-const kListSize = 5;
-const kMaxSlots = 255;
-const kMaxValue = 128;
-const kPulseMs = 50;
-const kSettlingTimeMs = 1;
+const browser = (() => {
+  if (navigator.userAgent.indexOf("Chrome") >= 0) {
+    return "Chrome";
+  } else if (navigator.userAgent.indexOf("Firefox") >= 0) {
+    return "Firefox";
+  }
+  return null;
+})();
 
-const kNumBits = kListSize * Math.log(kMaxValue) / Math.log(2);
+const k = {
+  Chrome: {
+    listSize: 5,
+    maxSlots: 255,
+    maxValue: 128,
+    pulseMs: 50,
+    settlingTimeMs: 0
+  },
+  Firefox: {
+    listSize: 5,
+    maxSlots: 250,
+    maxValue: 128,
+    pulseMs: 200,
+    settlingTimeMs: 50
+  }
+}[browser];
+
+const kNumBits = k.listSize * Math.log(k.maxValue) / Math.log(2);
 
 const params = new URLSearchParams(window.location.search);
 const debug = params.get("debug") === "true";
@@ -27,8 +47,8 @@ const roundTime = (timeMs) => Math.round(timeMs) / 1000;
 // Convert a list of small integers to a big integer
 const listToBigInteger = (list) => {
   let result = 0;
-  for (let i = kListSize - 1; i >= 0; --i) {
-    result = result * kMaxValue + list[i];
+  for (let i = k.listSize - 1; i >= 0; --i) {
+    result = result * k.maxValue + list[i];
   }
   return result;
 };
@@ -37,10 +57,10 @@ const listToBigInteger = (list) => {
 const bigIntegerToList = (bigInteger) => {
   const list = [];
   let feed = bigInteger;
-  for (let i = 0; i < kListSize; ++i) {
-    const remainder = feed % kMaxValue;
+  for (let i = 0; i < k.listSize; ++i) {
+    const remainder = feed % k.maxValue;
     list.push(remainder);
-    feed = (feed - remainder) / kMaxValue;
+    feed = (feed - remainder) / k.maxValue;
   }
   return list;
 };
@@ -71,16 +91,18 @@ const consumeSockets = async (max) => {
   for (let i = 0; i < max; ++i) {
     const socket = new WebSocket(kWebSocketAddress);
     socket.onerror = (_e) => {
-      // console.log(_e);
-      if (socket.readyState === 3) {
-        sockets.delete(socket);
-        recordStateToTrace();
-      }
+      sockets.delete(socket);
+      recordStateToTrace();
     };
     sockets.add(socket);
     recordStateToTrace();
   }
-  await sleepMs(kSettlingTimeMs);
+  await sleepMs(k.settlingTimeMs);
+  for (const socket of sockets) {
+    if (socket.readyState === 3) {
+      sockets.delete(socket);
+    }
+  }
   const nFinish = sockets.size;
   recordStateToTrace();
   return nFinish - nStart;
@@ -99,7 +121,7 @@ const releaseSockets = async (max) => {
     sockets.delete(socket);
     recordStateToTrace();
   }
-  await sleepMs(kSettlingTimeMs);
+  await sleepMs(k.settlingTimeMs);
   recordStateToTrace();
   return numberToDelete;
 };
@@ -114,10 +136,10 @@ const probe = async (max) => {
 // Return true if we have taken the sender role;
 // false if we are a receiver.
 const isSender = async () => {
-  await consumeSockets(kMaxSlots);
+  await consumeSockets(k.maxSlots);
   // log(`sockets.size: ${sockets.size}`);
-  if (sockets.size < 128) {
-    await releaseSockets(kMaxSlots);
+  if (sockets.size < k.maxSlots / 2) {
+    await releaseSockets(k.maxSlots);
     return false;
   } else {
     return true;
@@ -127,9 +149,9 @@ const isSender = async () => {
 // Send a big integer.
 const sendInteger = async (bigInteger, startTime) => {
   const list = bigIntegerToList(bigInteger);
-  let lastInteger = kMaxSlots - sockets.size;
-  for (let i = 0; i < kListSize; ++i) {
-    await sleepUntil(startTime + (i + 1) * kPulseMs);
+  let lastInteger = k.maxSlots - sockets.size;
+  for (let i = 0; i < k.listSize; ++i) {
+    await sleepUntil(startTime + (i + 1) * k.pulseMs);
     // At the beginng of each pulse, either consume
     // or release slots so that, for the rest of the pulse,
     // exactly `integer + 1` slots are unheld.
@@ -145,6 +167,7 @@ const sendInteger = async (bigInteger, startTime) => {
   if (debug) {
     log(list);
   }
+  //  return list;
   return bigIntegerToHex(bigInteger);
 };
 
@@ -153,14 +176,15 @@ const receiveInteger = async (startTime) => {
   const integerList = [];
   // Read n integers by probing for
   // unheld slots.
-  for (let i = 0; i < kListSize; ++i) {
-    await sleepUntil(startTime + (i + 1.25) * kPulseMs);
-    const integer = await probe(kMaxValue);
+  for (let i = 0; i < k.listSize; ++i) {
+    await sleepUntil(startTime + (i + 1.25) * k.pulseMs);
+    const integer = await probe(k.maxValue);
     integerList.push(integer - 1);
   }
   if (debug) {
     log(integerList);
   }
+  // return integerList;
   return bigIntegerToHex(listToBigInteger(integerList));
 };
 
@@ -188,9 +212,9 @@ const sleepUntilNextRoundInterval = async (interval) => {
 // When page loads
 const run = async () => {
   trace = [];
-  for (let i = 0; i < 20; ++i) {
+  for (let i = 0; i < 10; ++i) {
     recordStateToTrace();
-    const t0 = await sleepUntilNextRoundInterval((1 + kListSize) * kPulseMs);
+    const t0 = await sleepUntilNextRoundInterval((1 + k.listSize) * k.pulseMs);
     recordStateToTrace();
     const sender = await isSender();
     if (sender) {
@@ -229,16 +253,24 @@ const createButtonForCommand = (commandName, commandFunction) => {
 // Create all the command buttons.
 const createAllCommandButtons = () => {
   createButtonForCommand("consume 1", () => consumeSockets(1));
-  createButtonForCommand("consume all", () => consumeSockets(kMaxSlots));
+  createButtonForCommand("consume all", () => consumeSockets(k.maxSlots * 2));
   createButtonForCommand("release 1", () => releaseSockets(1));
-  createButtonForCommand("release all", () => releaseSockets(kMaxSlots));
-  createButtonForCommand("probe", () => probe(kMaxSlots));
+  createButtonForCommand("release all", () => releaseSockets(sockets.size));
+  createButtonForCommand("probe", () => probe(k.maxSlots));
   createButtonForCommand("is sender", isSender);
   createButtonForCommand("send", () => sendInteger(randomBigInteger()));
   createButtonForCommand("receive", () => receiveInteger());
+  createButtonForCommand("status", () => {
+    let result = "";
+    for (const socket of sockets) {
+      result += socket.readyState;
+    }
+    return result;
+  });
 };
 
 if (debug) {
   createAllCommandButtons();
+} else {
+  run();
 }
-run();
