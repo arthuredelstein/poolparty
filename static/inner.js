@@ -1,7 +1,7 @@
 // Default websocket address
 const kWebSocketAddress = "wss://poolparty.privacytests.org/websockets";
 
-const browser = (() => {
+const kBrowser = (() => {
   if (navigator.userAgent.indexOf("Chrome") >= 0) {
     return "Chrome";
   } else if (navigator.userAgent.indexOf("Firefox") >= 0) {
@@ -20,12 +20,12 @@ const k = {
   },
   Firefox: {
     listSize: 5,
-    maxSlots: 250,
+    maxSlots: 255,
     maxValue: 128,
-    pulseMs: 200,
+    pulseMs: 300,
     settlingTimeMs: 50
   }
-}[browser];
+}[kBrowser];
 
 const kNumBits = k.listSize * Math.log(k.maxValue) / Math.log(2);
 
@@ -88,9 +88,15 @@ const sleepUntil = async (timeMs) => {
 const consumeSockets = async (max) => {
   recordStateToTrace();
   const nStart = sockets.size;
+  let limitReached = false;
   for (let i = 0; i < max; ++i) {
+    if (limitReached) {
+      break;
+    }
     const socket = new WebSocket(kWebSocketAddress);
     socket.onerror = (_e) => {
+      limitReached = true;
+//      console.log(_e);
       sockets.delete(socket);
       recordStateToTrace();
     };
@@ -136,10 +142,11 @@ const probe = async (max) => {
 // Return true if we have taken the sender role;
 // false if we are a receiver.
 const isSender = async () => {
+  await releaseSockets(sockets.size);
   await consumeSockets(k.maxSlots);
-  // log(`sockets.size: ${sockets.size}`);
+//  console.log(`sockets.size: ${sockets.size} vs ${k.maxSlots/2}`);
   if (sockets.size < k.maxSlots / 2) {
-    await releaseSockets(k.maxSlots);
+    await releaseSockets(sockets.size);
     return false;
   } else {
     return true;
@@ -149,7 +156,8 @@ const isSender = async () => {
 // Send a big integer.
 const sendInteger = async (bigInteger, startTime) => {
   const list = bigIntegerToList(bigInteger);
-  let lastInteger = k.maxSlots - sockets.size;
+  await consumeSockets(k.maxSlots - sockets.size);
+  let lastInteger = 0;
   for (let i = 0; i < k.listSize; ++i) {
     await sleepUntil(startTime + (i + 1) * k.pulseMs);
     // At the beginng of each pulse, either consume
@@ -167,8 +175,8 @@ const sendInteger = async (bigInteger, startTime) => {
   if (debug) {
     log(list);
   }
-  //  return list;
-  return bigIntegerToHex(bigInteger);
+    return list;
+  //return bigIntegerToHex(bigInteger);
 };
 
 // Receive a big integer.
@@ -184,8 +192,8 @@ const receiveInteger = async (startTime) => {
   if (debug) {
     log(integerList);
   }
-  // return integerList;
-  return bigIntegerToHex(listToBigInteger(integerList));
+   return integerList;
+  //return bigIntegerToHex(listToBigInteger(integerList));
 };
 
 // A div containing a log of work done
