@@ -22,7 +22,7 @@ const k = {
     listSize: 5,
     maxSlots: 255,
     maxValue: 128,
-    pulseMs: 300,
+    pulseMs: 500,
     settlingTimeMs: 50
   }
 }[kBrowser];
@@ -164,13 +164,18 @@ const sendInteger = async (bigInteger, startTime) => {
     // or release slots so that, for the rest of the pulse,
     // exactly `integer + 1` slots are unheld.
     const integer = 1 + list[i];
-    const delta = integer - lastInteger;
-    lastInteger = integer;
-    if (delta > 0) {
-      await releaseSockets(delta);
+    if (kBrowser === "Firefox") {
+      await consumeSockets(lastInteger + 5);
+      await releaseSockets(integer);
     } else {
-      await consumeSockets(-delta);
+      const delta = integer - lastInteger;
+      if (delta > 0) {
+        await releaseSockets(delta);
+      } else {
+        await consumeSockets(-delta);
+      }
     }
+    lastInteger = integer;
   }
   if (debug) {
     log(list);
