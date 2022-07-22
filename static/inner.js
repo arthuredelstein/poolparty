@@ -1,21 +1,20 @@
-/*
+// # Pool Party Test Script
+//
+// Arthur Edelstein, arthuredelstein@gmail.com
+//
+// This script demonstrates transmission of data between
+// two websites using different modes of communication,
+// including websocket, sse, and worker pools.
+//
+// See https://arxiv.org/abs/2112.06324
 
-{
-  constructor (browser, recordFunction)
-  log(),
-  consumeOne(),
-  releaseOne(),
-  isDead(),
-  listSize,
-  maxSlots,
-  maxValue,
-  pulseMs,
-  settlingTimeMs
-}
-*/
-
+// Read query parameters, inherited from top-level window
 const params = new URLSearchParams(window.location.search);
+
+// Are we debugging?
 const debug = params.get("debug") === "true";
+
+// What mode are we in? (websocket, sse, worker)
 const mode = params.get("mode");
 
 // Figure out the current browser.
@@ -28,10 +27,24 @@ const kBrowser = (() => {
   return null;
 })();
 
+// Declare behaviors of browsers for different modes.
+// Behavior type looks like:
+// {
+//   create(), // returns a resource
+//   destroy(resource),
+//   isDead(),
+//   constants: {
+//     listSize,
+//     maxSlots,
+//     maxValue,
+//     pulseMs,
+//     settlingTimeMs
+//   }
+// }
 const behaviors = {
   websocket: {
-    consumeOne: () => new WebSocket("wss://poolparty.privacytests.org/websockets"),
-    releaseOne: (socket) => socket.close(),
+    create: () => new WebSocket("wss://poolparty.privacytests.org/websockets"),
+    destroy: (socket) => socket.close(),
     isDead: (socket) => socket.readyState === WebSocket.CLOSED,
     constants: {
       Chrome: {
@@ -51,7 +64,7 @@ const behaviors = {
     }
   },
   worker: {
-    consumeOne: () => {
+    create: () => {
       const worker = new Worker("worker.js");
       worker.alive = false;
       worker.onmessage = function (_event) {
@@ -59,7 +72,7 @@ const behaviors = {
       };
       return worker;
     },
-    releaseOne: (worker) => worker.terminate(),
+    destroy: (worker) => worker.terminate(),
     isDead: (worker) => worker.alive === false,
     constants: {
       Chrome: {
@@ -79,7 +92,7 @@ const behaviors = {
     }
   },
   sse: {
-    consumeOne: () => {
+    create: () => {
       const source = new EventSource("events/source");
       source.alive = true;
       source.onerror = () => {
@@ -87,7 +100,7 @@ const behaviors = {
       };
       return source;
     },
-    releaseOne: (source) => source.close(),
+    destroy: (source) => source.close(),
     isDead: (source) => !source.alive, // source.readyState === EventSource.CLOSED,
     constants: {
       Chrome: {
@@ -105,25 +118,31 @@ const behaviors = {
         settlingTimeMs: 400
       }
     }
-  }
-
+  },
 };
 
-const { consumeOne, releaseOne, isDead, constants } = behaviors[mode];
+// Get the behaviors for the current mode:
+const { create, destroy, isDead, constants } = behaviors[mode];
+
+// Read constants for current browser and mode:
 const k = constants[kBrowser];
 
+// The number of total bits we are transmitting between sites:
 const kNumBits = k.listSize * Math.log(k.maxValue) / Math.log(2);
 
 // All resources, dead or alive (though we try to remove
 // dead resources quickly).
 const resources = new Set();
 
+// A recording of the number of resources over time.
 let trace = [];
 
+// Record an integer, timestamped.
 const recordIntegerToTrace = (i) => {
   trace.push([Date.now(), i]);
 };
 
+// Record current number of resources, timestamped
 const capture = () => {
   recordIntegerToTrace(resources.size);
 };
@@ -173,13 +192,13 @@ const consume = async (max) => {
   capture();
   const nStart = resources.size;
   for (let i = 0; i < max; ++i) {
-    resources.add(consumeOne());
+    resources.add(create());
     capture();
   }
   await sleepMs(k.settlingTimeMs);// * max / k.maxSlots);
   for (const resource of resources) {
     if (isDead(resource)) {
-      releaseOne(resource);
+      destroy(resource);
       resources.delete(resource);
       capture();
     }
@@ -198,7 +217,7 @@ const release = async (max) => {
   const numberToRelease = Math.min(max, resources.size);
   for (let i = 0; i < numberToRelease; ++i) {
     const resource = resources.values().next().value;
-    releaseOne(resource);
+    destroy(resource);
     resources.delete(resource);
     capture();
   }
@@ -364,4 +383,5 @@ const main = async () => {
   }
 };
 
+// Run the program!
 main();
