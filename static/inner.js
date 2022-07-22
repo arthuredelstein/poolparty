@@ -1,6 +1,4 @@
-
 /*
-Pool interface
 
 {
   constructor (browser, recordFunction)
@@ -16,13 +14,26 @@ Pool interface
 }
 */
 
-// All resources, dead or alive (though we try to remove
-// dead resources quickly).
-const resources = new Set();
+const params = new URLSearchParams(window.location.search);
+const debug = params.get("debug") === "true";
+const mode = params.get("mode");
 
-class SocketPool {
-  constructor (browser) {
-    const constants = {
+// Figure out the current browser.
+const kBrowser = (() => {
+  if (navigator.userAgent.indexOf("Chrome") >= 0) {
+    return "Chrome";
+  } else if (navigator.userAgent.indexOf("Firefox") >= 0) {
+    return "Firefox";
+  }
+  return null;
+})();
+
+const behaviors = {
+  websocket: {
+    consumeOne: () => new WebSocket("wss://poolparty.privacytests.org/websockets"),
+    releaseOne: (socket) => socket.close(),
+    isDead: (socket) => socket.readyState === 3,
+    constants: {
       Chrome: {
         listSize: 5,
         maxSlots: 255,
@@ -37,36 +48,46 @@ class SocketPool {
         pulseMs: 350, // 500,
         settlingTimeMs: 50
       }
-    }[browser];
-    Object.assign(this, constants);
-    this.numBits = this.listSize * Math.log(this.maxValue) / Math.log(2);
-  }
-
-  consumeOne () {
-    return new WebSocket("wss://poolparty.privacytests.org/websockets");
-  }
-
-  releaseOne (socket) {
-    socket.close();
-  }
-
-  isDead (socket) {
-    return socket.readyState === 3;
+    }
+  },
+  worker: {
+    consumeOne: () => {
+      const worker = new Worker("worker.js");
+      worker.alive = false;
+      worker.onmessage = function (_event) {
+        worker.alive = true;
+      };
+      return worker;
+    },
+    releaseOne: (worker) => worker.terminate(),
+    isDead: (worker) => worker.alive === false,
+    constants: {
+      Chrome: {
+        listSize: 5,
+        maxSlots: 512,
+        maxValue: 128,
+        pulseMs: 1000,
+        settlingTimeMs: 200
+      },
+      Firefox: {
+        listSize: 5,
+        maxSlots: 512,
+        maxValue: 128,
+        pulseMs: 1400,
+        settlingTimeMs: 400
+      }
+    }
   }
 };
 
-// Figure out the current browser.
-const kBrowser = (() => {
-  if (navigator.userAgent.indexOf("Chrome") >= 0) {
-    return "Chrome";
-  } else if (navigator.userAgent.indexOf("Firefox") >= 0) {
-    return "Firefox";
-  }
-  return null;
-})();
+const { consumeOne, releaseOne, isDead, constants } = behaviors[mode];
+const k = constants[kBrowser];
 
-const params = new URLSearchParams(window.location.search);
-const debug = params.get("debug") === "true";
+const kNumBits = k.listSize * Math.log(k.maxValue) / Math.log(2);
+
+// All resources, dead or alive (though we try to remove
+// dead resources quickly).
+const resources = new Set();
 
 let trace = [];
 
@@ -119,16 +140,17 @@ const sleepUntil = async (timeMs) => {
 };
 
 // Consume and return number consumed.
-const consume = async (pool, max) => {
+const consume = async (max) => {
   capture();
   const nStart = resources.size;
   for (let i = 0; i < max; ++i) {
-    resources.add(pool.consumeOne());
+    resources.add(consumeOne());
     capture();
   }
-  await sleepMs(pool.settlingTimeMs);
+  await sleepMs(k.settlingTimeMs);
   for (const resource of resources) {
-    if (pool.isDead(resource)) {
+    if (isDead(resource)) {
+      releaseOne(resource);
       resources.delete(resource);
     }
   }
@@ -138,7 +160,7 @@ const consume = async (pool, max) => {
 };
 
 // Release up to max, and return number released.
-const release = async (pool, max) => {
+const release = async (max) => {
   capture();
   if (max === 0) {
     return 0;
@@ -146,30 +168,30 @@ const release = async (pool, max) => {
   const numberToRelease = Math.min(max, resources.size);
   for (let i = 0; i < numberToRelease; ++i) {
     const resource = resources.values().next().value;
-    pool.releaseOne(resource);
+    releaseOne(resource);
     resources.delete(resource);
     capture();
   }
-  await sleepMs(pool.settlingTimeMs);
+  await sleepMs(k.settlingTimeMs);
   capture();
   return numberToRelease;
 };
 
 // Probe for unheld slots.
-const probe = async (pool, max) => {
-  const consumedCount = await consume(pool, max);
-  await release(pool, consumedCount);
+const probe = async (max) => {
+  const consumedCount = await consume(max);
+  await release(consumedCount);
   return consumedCount;
 };
 
 // Return true if we have taken the sender role;
 // false if we are a receiver.
-const isSender = async (pool) => {
-  await release(pool, resources.size);
-  await consume(pool, pool.maxSlots);
-  //  console.log(`resources.size: ${resources.size} vs ${pool.maxSlots/2}`);
-  if (resources.size < pool.maxSlots / 2) {
-    await release(pool, resources.size);
+const isSender = async () => {
+  await release(resources.size);
+  await consume(k.maxSlots);
+  // console.log(`${resources.size} vs ${k.maxSlots / 2}`);
+  if (resources.size < k.maxSlots / 2) {
+    await release(resources.size);
     return false;
   } else {
     return true;
@@ -177,25 +199,25 @@ const isSender = async (pool) => {
 };
 
 // Send a big integer.
-const sendInteger = async (pool, bigInteger, startTime) => {
-  const list = bigIntegerToList(bigInteger, pool.listSize, pool.maxValue);
-  await consume(pool, pool.maxSlots - resources.size);
+const sendInteger = async (bigInteger, startTime) => {
+  const list = bigIntegerToList(bigInteger, k.listSize, k.maxValue);
+  await consume(k.maxSlots - resources.size);
   let lastInteger = 0;
-  for (let i = 0; i < pool.listSize; ++i) {
-    await sleepUntil(startTime + (i + 1) * pool.pulseMs);
+  for (let i = 0; i < k.listSize; ++i) {
+    await sleepUntil(startTime + (i + 1) * k.pulseMs);
     // At the beginng of each pulse, either consume
     // or release slots so that, for the rest of the pulse,
     // exactly `integer + 1` slots are unheld.
     const integer = 1 + list[i];
     if (kBrowser === "Firefox") {
-      await consume(pool, lastInteger + 5);
-      await release(pool, integer);
+      await consume(lastInteger + 5);
+      await release(integer);
     } else {
       const delta = integer - lastInteger;
       if (delta > 0) {
-        await release(pool, delta);
+        await release(delta);
       } else {
-        await consume(pool, -delta);
+        await consume(-delta);
       }
     }
     lastInteger = integer;
@@ -204,24 +226,24 @@ const sendInteger = async (pool, bigInteger, startTime) => {
     log(list);
   }
   // return list;
-  return bigIntegerToHex(bigInteger, pool.numBits);
+  return bigIntegerToHex(bigInteger, kNumBits);
 };
 
 // Receive a big integer.
-const receiveInteger = async (pool, startTime) => {
+const receiveInteger = async (startTime) => {
   const integerList = [];
   // Read n integers by probing for
   // unheld slots.
-  for (let i = 0; i < pool.listSize; ++i) {
-    await sleepUntil(startTime + (i + 1.25) * pool.pulseMs);
-    const integer = await probe(pool, pool.maxValue);
+  for (let i = 0; i < k.listSize; ++i) {
+    await sleepUntil(startTime + (i + 1.25) * k.pulseMs);
+    const integer = await probe(k.maxValue);
     integerList.push(integer - 1);
   }
   if (debug) {
     log(integerList);
   }
   // return integerList;
-  return bigIntegerToHex(listToBigInteger(integerList, pool.listSize, pool.maxValue), pool.numBits);
+  return bigIntegerToHex(listToBigInteger(integerList, k.listSize, k.maxValue), kNumBits);
 };
 
 // A div containing a log of work done
@@ -237,7 +259,7 @@ const log = (msg, elapsedMs) => {
   if (elapsedMs !== undefined) {
     text += `, elapsed, ms: ${Math.round(elapsedMs)}`;
   }
-  text += "\n";
+  text += `, holding: ${resources.size}\n`;
   logDiv.innerText += text;
   window.scrollBy(0, logDiv.scrollHeight);
 };
@@ -249,26 +271,28 @@ const sleepUntilNextRoundInterval = async (interval) => {
 };
 
 // When page loads
-const run = async (pool) => {
+const run = async () => {
   trace = [];
   for (let i = 0; i < 10; ++i) {
     capture();
-    const t0 = await sleepUntilNextRoundInterval((1 + pool.listSize) * pool.pulseMs);
+    const t0 = await sleepUntilNextRoundInterval((1 + k.listSize) * k.pulseMs);
     capture();
-    const sender = await isSender(pool);
+    const sender = await isSender();
     if (sender) {
       const t1 = performance.now();
-      const resultList = await sendInteger(pool, randomBigInteger(pool.numBits), t0);
+      const result = await sendInteger(randomBigInteger(kNumBits), t0);
       const t2 = performance.now();
-      log(`send: ${resultList}`, t2 - t1);
+      log(`send: ${result}`, t2 - t1);
     } else {
       const t1 = performance.now();
-      const resultList = await receiveInteger(pool, t0);
+      const result = await receiveInteger(t0);
       const t2 = performance.now();
-      log(`recv: ${resultList}`, t2 - t1);
+      log(`recv: ${result}`, t2 - t1);
     }
   }
   capture();
+  // Release all resources
+  release(resources.size);
   console.log(JSON.stringify(trace));
 };
 
@@ -290,25 +314,23 @@ const createButtonForCommand = (commandName, commandFunction) => {
 };
 
 // Create all the command buttons.
-const createAllCommandButtons = (pool) => {
-  createButtonForCommand("consume 1", () => consume(pool, 1));
-  createButtonForCommand("consume all", () => consume(pool, pool.maxSlots * 2));
-  createButtonForCommand("release 1", () => release(pool, 1));
-  createButtonForCommand("release all", () => release(pool, resources.size));
-  createButtonForCommand("probe", () => probe(pool, pool.maxSlots));
-  createButtonForCommand("is sender", () => isSender(pool));
-  createButtonForCommand("send", () => sendInteger(pool, randomBigInteger(pool.numBits), 0));
-  createButtonForCommand("receive", () => receiveInteger(pool));
+const createAllCommandButtons = () => {
+  createButtonForCommand("consume 1", () => consume(1));
+  createButtonForCommand("consume all", () => consume(k.maxSlots * 2));
+  createButtonForCommand("release 1", () => release(1));
+  createButtonForCommand("release all", () => release(resources.size));
+  createButtonForCommand("probe", () => probe(k.maxSlots));
+  createButtonForCommand("is sender", () => isSender());
+  createButtonForCommand("send", () => sendInteger(randomBigInteger(kNumBits), 0));
+  createButtonForCommand("receive", () => receiveInteger());
 };
 
 // The main program.
-
 const main = async () => {
-  const pool = new SocketPool(kBrowser);
   if (debug) {
-    createAllCommandButtons(pool);
+    createAllCommandButtons();
   } else {
-    await run(pool);
+    await run();
   }
 };
 
