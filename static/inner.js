@@ -187,7 +187,13 @@ const sleepUntil = async (timeMs) => {
   return Date.now();
 };
 
-// Consume and return number consumed.
+// Wait until the next second begins according to
+// the system clock.
+const sleepUntilNextRoundInterval = async (interval) => {
+  return sleepUntil(Math.ceil(Date.now() / interval) * interval);
+};
+
+// Consume up to 'max' resource slots and return number actually consumed.
 const consume = async (max) => {
   capture();
   const nStart = resources.size;
@@ -208,7 +214,7 @@ const consume = async (max) => {
   return nFinish - nStart;
 };
 
-// Release up to max, and return number released.
+// Release up to max resource slots and return number released.
 const release = async (max) => {
   capture();
   if (max === 0) {
@@ -226,7 +232,7 @@ const release = async (max) => {
   return numberToRelease;
 };
 
-// Probe for unheld slots.
+// Probe for unheld resource slots.
 const probe = async (max) => {
   const consumedCount = await consume(max);
   await release(consumedCount);
@@ -311,12 +317,6 @@ const log = (msg, elapsedMs) => {
   text += `, holding: ${resources.size}\n`;
   logDiv.innerText += text;
   window.scrollBy(0, logDiv.scrollHeight);
-};
-
-// Wait until the next second begins according to
-// the system clock.
-const sleepUntilNextRoundInterval = async (interval) => {
-  return sleepUntil(Math.ceil(Date.now() / interval) * interval);
 };
 
 // When page loads
