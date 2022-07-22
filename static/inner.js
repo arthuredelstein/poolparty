@@ -32,7 +32,7 @@ const behaviors = {
   websocket: {
     consumeOne: () => new WebSocket("wss://poolparty.privacytests.org/websockets"),
     releaseOne: (socket) => socket.close(),
-    isDead: (socket) => socket.readyState === 3,
+    isDead: (socket) => socket.readyState === WebSocket.CLOSED,
     constants: {
       Chrome: {
         listSize: 5,
@@ -77,7 +77,36 @@ const behaviors = {
         settlingTimeMs: 400
       }
     }
+  },
+  sse: {
+    consumeOne: () => {
+      const source = new EventSource("events/source");
+      source.alive = true;
+      source.onerror = () => {
+        source.alive = false;
+      }
+      return source;
+    },
+    releaseOne: (source) => source.close(),
+    isDead: (source) => !source.alive,//source.readyState === EventSource.CLOSED,
+    constants: {
+      Chrome: {
+        listSize: 5,
+        maxSlots: 1350,
+        maxValue: 128,
+        pulseMs: 2000,
+        settlingTimeMs: 800
+      },
+      Firefox: {
+        listSize: 5,
+        maxSlots: 512,
+        maxValue: 128,
+        pulseMs: 1400,
+        settlingTimeMs: 400
+      }
+    }
   }
+
 };
 
 const { consumeOne, releaseOne, isDead, constants } = behaviors[mode];
@@ -147,11 +176,12 @@ const consume = async (max) => {
     resources.add(consumeOne());
     capture();
   }
-  await sleepMs(k.settlingTimeMs);
+  await sleepMs(k.settlingTimeMs);// * max / k.maxSlots);
   for (const resource of resources) {
     if (isDead(resource)) {
       releaseOne(resource);
       resources.delete(resource);
+      capture();
     }
   }
   const nFinish = resources.size;
@@ -189,7 +219,7 @@ const probe = async (max) => {
 const isSender = async () => {
   await release(resources.size);
   await consume(k.maxSlots);
-  // console.log(`${resources.size} vs ${k.maxSlots / 2}`);
+  console.log(`${resources.size} vs ${k.maxSlots / 2}`);
   if (resources.size < k.maxSlots / 2) {
     await release(resources.size);
     return false;
@@ -209,7 +239,7 @@ const sendInteger = async (bigInteger, startTime) => {
     // or release slots so that, for the rest of the pulse,
     // exactly `integer + 1` slots are unheld.
     const integer = 1 + list[i];
-    if (kBrowser === "Firefox") {
+    if (kBrowser === "Firefox" && mode === "websocket") {
       await consume(lastInteger + 5);
       await release(integer);
     } else {
