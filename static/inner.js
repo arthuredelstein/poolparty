@@ -84,11 +84,11 @@ const behaviors = {
       source.alive = true;
       source.onerror = () => {
         source.alive = false;
-      }
+      };
       return source;
     },
     releaseOne: (source) => source.close(),
-    isDead: (source) => !source.alive,//source.readyState === EventSource.CLOSED,
+    isDead: (source) => !source.alive, // source.readyState === EventSource.CLOSED,
     constants: {
       Chrome: {
         listSize: 5,
