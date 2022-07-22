@@ -5,9 +5,9 @@ Pool interface
 {
   constructor (browser, recordFunction)
   log(),
-  consume(max),
-  release(max),
-  held(),
+  consumeOne(),
+  releaseOne(),
+  isDead(),
   listSize,
   maxSlots,
   maxValue,
@@ -16,12 +16,12 @@ Pool interface
 }
 */
 
-// Default websocket address
-const kWebSocketAddress = "wss://poolparty.privacytests.org/websockets";
+// All resources, dead or alive (though we try to remove
+// dead sockets quickly).
+const sockets = new Set();
 
 class SocketPool {
-  constructor (browser, recordFunction) {
-    this.log = () => recordFunction(this.held());
+  constructor (browser) {
     const constants = {
       Chrome: {
         listSize: 5,
@@ -42,32 +42,16 @@ class SocketPool {
     this.numBits = this.listSize * Math.log(this.maxValue) / Math.log(2);
   }
 
-  // All sockets, dead or alive (though we try to remove
-  // dead sockets quickly).
-  _sockets = new Set();
-
-  // Return the number of sockets currently held.
-  held () {
-    return this._sockets.size;
+  consumeOne () {
+    return new WebSocket("wss://poolparty.privacytests.org/websockets");
   }
 
-  async consumeOne () {
-    const socket = new WebSocket(kWebSocketAddress);
-    this._sockets.add(socket);
-  }
-
-  async releaseOne () {
-    const socket = this._sockets.values().next().value;
+  releaseOne (socket) {
     socket.close();
-    this._sockets.delete(socket);
   }
 
-  collectGarbage () {
-    for (const socket of this._sockets) {
-      if (socket.readyState === 3) {
-        this._sockets.delete(socket);
-      }
-    }
+  isDead (socket) {
+    return socket.readyState === 3;
   }
 };
 
@@ -88,6 +72,10 @@ let trace = [];
 
 const recordIntegerToTrace = (i) => {
   trace.push([Date.now(), i]);
+};
+
+const capture = () => {
+  recordIntegerToTrace(sockets.size);
 };
 
 // Convert a list of small integers to a big integer
@@ -132,32 +120,38 @@ const sleepUntil = async (timeMs) => {
 
 // Consume and return number consumed.
 const consume = async (pool, max) => {
-  pool.log();
-  const nStart = pool.held();
+  capture();
+  const nStart = sockets.size;
   for (let i = 0; i < max; ++i) {
-    pool.consumeOne();
-    pool.log();
+    sockets.add(pool.consumeOne());
+    capture();
   }
   await sleepMs(pool.settlingTimeMs);
-  pool.collectGarbage();
-  const nFinish = pool.held();
-  pool.log();
+  for (const socket of sockets) {
+    if (pool.isDead(socket)) {
+      sockets.delete(socket);
+    }
+  }
+  const nFinish = sockets.size;
+  capture();
   return nFinish - nStart;
 };
 
 // Release up to max, and return number released.
 const release = async (pool, max) => {
-  pool.log();
+  capture();
   if (max === 0) {
     return 0;
   }
-  const numberToRelease = Math.min(max, pool.held());
+  const numberToRelease = Math.min(max, sockets.size);
   for (let i = 0; i < numberToRelease; ++i) {
-    pool.releaseOne();
-    pool.log();
+    const socket = sockets.values().next().value;
+    pool.releaseOne(socket);
+    sockets.delete(socket);
+    capture();
   }
   await sleepMs(pool.settlingTimeMs);
-  pool.log();
+  capture();
   return numberToRelease;
 };
 
@@ -171,11 +165,11 @@ const probe = async (pool, max) => {
 // Return true if we have taken the sender role;
 // false if we are a receiver.
 const isSender = async (pool) => {
-  await release(pool, pool.held());
+  await release(pool, sockets.size);
   await consume(pool, pool.maxSlots);
-  //  console.log(`pool.held(): ${pool.held()} vs ${pool.maxSlots/2}`);
-  if (pool.held() < pool.maxSlots / 2) {
-    await release(pool, pool.held());
+  //  console.log(`sockets.size: ${sockets.size} vs ${pool.maxSlots/2}`);
+  if (sockets.size < pool.maxSlots / 2) {
+    await release(pool, sockets.size);
     return false;
   } else {
     return true;
@@ -185,7 +179,7 @@ const isSender = async (pool) => {
 // Send a big integer.
 const sendInteger = async (pool, bigInteger, startTime) => {
   const list = bigIntegerToList(bigInteger, pool.listSize, pool.maxValue);
-  await consume(pool, pool.maxSlots - pool.held());
+  await consume(pool, pool.maxSlots - sockets.size);
   let lastInteger = 0;
   for (let i = 0; i < pool.listSize; ++i) {
     await sleepUntil(startTime + (i + 1) * pool.pulseMs);
@@ -258,9 +252,9 @@ const sleepUntilNextRoundInterval = async (interval) => {
 const run = async (pool) => {
   trace = [];
   for (let i = 0; i < 10; ++i) {
-    pool.log();
+    capture();
     const t0 = await sleepUntilNextRoundInterval((1 + pool.listSize) * pool.pulseMs);
-    pool.log();
+    capture();
     const sender = await isSender(pool);
     if (sender) {
       const t1 = performance.now();
@@ -274,7 +268,7 @@ const run = async (pool) => {
       log(`receive: ${resultList}`, t2 - t1);
     }
   }
-  pool.log();
+  capture();
   console.log(JSON.stringify(trace));
 };
 
@@ -300,7 +294,7 @@ const createAllCommandButtons = (pool) => {
   createButtonForCommand("consume 1", () => consume(pool, 1));
   createButtonForCommand("consume all", () => consume(pool, pool.maxSlots * 2));
   createButtonForCommand("release 1", () => release(pool, 1));
-  createButtonForCommand("release all", () => release(pool, pool.held()));
+  createButtonForCommand("release all", () => release(pool, sockets.size));
   createButtonForCommand("probe", () => probe(pool, pool.maxSlots));
   createButtonForCommand("is sender", () => isSender(pool));
   createButtonForCommand("send", () => sendInteger(pool, randomBigInteger(pool.numBits), 0));
@@ -310,7 +304,7 @@ const createAllCommandButtons = (pool) => {
 // The main program.
 
 const main = async () => {
-  const pool = new SocketPool(kBrowser, recordIntegerToTrace);
+  const pool = new SocketPool(kBrowser);
   if (debug) {
     createAllCommandButtons(pool);
   } else {
