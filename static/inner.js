@@ -64,12 +64,12 @@ const behaviors = {
         maxSlots: 255,
         maxValue: 128,
         pulseMs: 70,
-        negotiateMs: 150,
-        settlingTimeMs: 0
+        negotiateMs: 100,
+        settlingTimeMs: 20
       },
       Firefox: {
         listSize: 5,
-        maxSlots: 255,
+        maxSlots: 200,
         maxValue: 128,
         pulseMs: 800,
         negotiateMs: 1200,
@@ -245,6 +245,7 @@ const release = async (max) => {
     resources.delete(resource);
     capture();
   }
+  await sleepMs(k.settlingTimeMs);
   capture();
   return numberToRelease;
 };
@@ -362,6 +363,11 @@ const run = async () => {
   await sleepMs(k.pulseMs);
   release(resources.size);
   console.log(JSON.stringify(trace));
+  console.log("Negotiation time", k.negotiateMs);
+  console.log("Pulse length", k.pulseMs);
+  console.log("Cycle time", k.negotiateMs + k.listSize * k.pulseMs);
+  console.log("Pool size", k.maxSlots);
+
 };
 
 // A div containing the command buttons.
