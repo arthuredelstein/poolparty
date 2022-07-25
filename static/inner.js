@@ -11,6 +11,12 @@
 // Read query parameters, inherited from top-level window
 const params = new URLSearchParams(window.location.search);
 
+// Read an integer parameter
+const intParam = (paramName) => {
+  let result = params.get(paramName);
+  return result === null ? undefined : Number.parseInt(result);
+};
+
 // Are we debugging?
 const debug = params.get("debug") === "true";
 
@@ -69,7 +75,7 @@ const behaviors = {
       },
       Firefox: {
         listSize: 5,
-        maxSlots: 200,
+        maxSlots: 260,
         maxValue: 128,
         pulseMs: 800,
         negotiateMs: 1200,
@@ -104,7 +110,7 @@ const behaviors = {
         maxValue: 128,
         pulseMs: 1000,
         negotiateMs: 1500,
-        settlingTimeMs: 500
+        settlingTimeMs: 100
       }
     }
   },
@@ -341,7 +347,9 @@ const log = (msg, elapsedMs) => {
 
 // When page loads
 const run = async () => {
-  for (let i = 0; i < 10; ++i) {
+  const bigIntegerList = [];
+  const numCycles = intParam("cycles") ?? 10;
+  for (let i = 0; i < numCycles; ++i) {
     capture();
     const t0 = await sleepUntilNextRoundInterval(k.negotiateMs + k.listSize * k.pulseMs);
     capture();
@@ -350,11 +358,13 @@ const run = async () => {
       const t1 = performance.now();
       const result = await sendInteger(randomBigInteger(kNumBits), t0);
       const t2 = performance.now();
+      bigIntegerList.push(result);
       log(`send: ${result}`, t2 - t1);
     } else {
       const t1 = performance.now();
       const result = await receiveInteger(t0);
       const t2 = performance.now();
+      bigIntegerList.push(result);
       log(`recv: ${result}`, t2 - t1);
     }
   }
@@ -367,7 +377,11 @@ const run = async () => {
   console.log("Pulse length", k.pulseMs);
   console.log("Cycle time", k.negotiateMs + k.listSize * k.pulseMs);
   console.log("Pool size", k.maxSlots);
-
+  const response = await fetch("events/result", {
+    method: "POST", cache: "no-cache",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(bigIntegerList)});
+  console.log("match:", await response.text());
 };
 
 // A div containing the command buttons.

@@ -3,6 +3,8 @@ const { WebSocketServer } = require('ws');
 
 var app = express();
 
+app.use(express.json());
+
 app.get('/', function(req, res, next){
   console.log("hello");
   res.send("hello, welcome to events\n");
@@ -34,6 +36,22 @@ app.get('/source', async function(req, res) {
     // Emit an SSE that contains the current 'count' as a string
     res.write(`data: ${count}\n\n`);
   }*/
+});
+
+let lastResults = [];
+
+app.post('/result', async function (req, res) {
+  const currentResults = req.body;
+  console.log({currentResults, lastResults});
+  let matchCount = 0.0;
+  for (let i = 0; i < currentResults.length; ++i) {
+    if (lastResults.includes(currentResults[i])) {
+      ++matchCount;
+    }
+  }
+  console.log(matchCount);
+  lastResults = currentResults;
+  res.send(`${matchCount / currentResults.length}`);
 });
 
 
