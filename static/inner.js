@@ -29,6 +29,8 @@ const kBrowser = (() => {
     return "Chrome";
   } else if (navigator.userAgent.indexOf("Firefox") >= 0) {
     return "Firefox";
+  } else if (navigator.userAgent.indexOf("Safari") >= 0) {
+    return "Safari";
   }
   return null;
 })();
@@ -69,11 +71,19 @@ const behaviors = {
         listSize: 5,
         maxSlots: 255,
         maxValue: 128,
-        pulseMs: 70,
-        negotiateMs: 100,
-        settlingTimeMs: 20
+        pulseMs: 150,
+        negotiateMs: 250,
+        settlingTimeMs: 50
       },
       Firefox: {
+        listSize: 5,
+        maxSlots: 260,
+        maxValue: 128,
+        pulseMs: 800,
+        negotiateMs: 1200,
+        settlingTimeMs: 200
+      },
+      Safari: {
         listSize: 5,
         maxSlots: 260,
         maxValue: 128,
@@ -111,6 +121,14 @@ const behaviors = {
         pulseMs: 1000,
         negotiateMs: 1500,
         settlingTimeMs: 100
+      },
+      Safari: {
+        listSize: 5,
+        maxSlots: 512,
+        maxValue: 128,
+        pulseMs: 1000,
+        negotiateMs: 1500,
+        settlingTimeMs: 100
       }
     }
   },
@@ -137,6 +155,13 @@ const behaviors = {
         settlingTimeMs: 200
       },
       Firefox: {
+        listSize: 5,
+        maxSlots: 512,
+        maxValue: 128,
+        pulseMs: 1400,
+        settlingTimeMs: 400
+      },
+      Safari: {
         listSize: 5,
         maxSlots: 512,
         maxValue: 128,
@@ -232,10 +257,10 @@ const consume = async (max) => {
       resources.add(result.value);
     }
   }
+//  capture();
+//  await sleepMs(k.settlingTimeMs);
   capture();
-  const nFinish = resources.size;
-  capture();
-  return nFinish - nStart;
+  return resources.size - nStart;
 };
 
 // Release up to max resource slots and return number released.
@@ -251,14 +276,18 @@ const release = async (max) => {
     resources.delete(resource);
     capture();
   }
-  await sleepMs(k.settlingTimeMs);
-  capture();
+//  await sleepMs(k.settlingTimeMs);
+//  capture();
   return numberToRelease;
 };
 
 // Probe for unheld resource slots.
 const probe = async (max) => {
-  const consumedCount = await consume(max);
+  const consumedCount1 = await consume(max);
+  await sleepMs(10);
+  const consumedCount2 = await consume(max);
+  await sleepMs(10);
+  const consumedCount = consumedCount1 + consumedCount2;
   await release(consumedCount);
   return consumedCount;
 };
@@ -266,9 +295,10 @@ const probe = async (max) => {
 // Return true if we have taken the sender role;
 // false if we are a receiver.
 const isSender = async () => {
-  await release(resources.size);
+  //await release(resources.size);
   await consume(k.maxSlots);
   await sleepMs(k.settlingTimeMs);
+  capture();
   console.log(`${resources.size} vs ${k.maxSlots / 2}`);
   if (resources.size < k.maxSlots / 2) {
     await release(resources.size);
@@ -281,8 +311,8 @@ const isSender = async () => {
 // Send a big integer.
 const sendInteger = async (bigInteger, startTime) => {
   const list = bigIntegerToList(bigInteger, k.listSize, k.maxValue);
-  await consume(k.maxSlots - resources.size);
-  let lastInteger = 0;
+  //await consume(k.maxSlots - resources.size);
+  let lastInteger = k.maxSlots - resources.size;
   for (let i = 0; i < k.listSize; ++i) {
     await sleepUntil(startTime + k.negotiateMs + i * k.pulseMs);
     // At the beginng of each pulse, either consume
