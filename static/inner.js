@@ -27,6 +27,8 @@ const mode = params.get("mode");
 const kBrowser = (() => {
   if (navigator.userAgent.indexOf("Edg") >= 0) {
     return "Edge";
+  } else if (navigator.brave !== undefined) {
+    return "Brave";
   } else if (navigator.userAgent.indexOf("Chrome") >= 0) {
     return "Chrome";
   } else if (navigator.userAgent.indexOf("Firefox") >= 0) {
@@ -55,19 +57,25 @@ const behaviors = {
     create: () => new Promise((resolve, reject) => {
       const socket = new WebSocket("wss://poolparty.privacytests.org/websockets");
       const timeout = window.setTimeout(() => {
-        if (socket.readyState === WebSocket.CLOSED) {
+  /*      if (socket.readyState === WebSocket.CLOSED) {
           reject(new Error("websocket error"));
-        } else {
+        } else {*/
           resolve(socket);
-        }
-      }, kBrowser === "Chrome" ? 1 : 100);
+      //  }
+      }, kBrowser === "Chrome" || kBrowser === "Edge" ? 1 : 10);
       socket.onerror = () => {
         socket.close();
         clearTimeout(timeout);
         reject(new Error("websocket error"));
       };
     }),
-    destroy: (socket) => socket.close(),
+    destroy: (socket) => new Promise(resolve => {
+      if (socket.readyState === WebSocket.CLOSED) {
+        resolve();
+      }
+      socket.addEventListener("close", resolve, { once: true });
+      socket.close();
+    }),
     alive: (socket) =>
       socket.readyState === WebSocket.CONNECTING ||
       socket.readyState === WebSocket.OPEN,
@@ -76,25 +84,22 @@ const behaviors = {
         listSize: 5,
         maxSlots: 255,
         maxValue: 128,
-        pulseMs: 600,
-        negotiateMs: 600,
-        settlingTimeMs: 20
+        pulseMs: 100,
+        negotiateMs: 100,
       },
       Edge: {
         listSize: 5,
         maxSlots: 255,
         maxValue: 128,
-        pulseMs: 2000,
-        negotiateMs: 2000,
-        settlingTimeMs: 20
+        pulseMs: 100,
+        negotiateMs: 100,
       },
       Firefox: {
         listSize: 5,
         maxSlots: 200,
         maxValue: 128,
         pulseMs: 1000,
-        negotiateMs: 1000,
-        settlingTimeMs: 200
+        negotiateMs: 2000,
       },
       Safari: {
         listSize: 5,
@@ -102,7 +107,6 @@ const behaviors = {
         maxValue: 128,
         pulseMs: 800,
         negotiateMs: 1200,
-        settlingTimeMs: 200
       }
     }
   },
@@ -112,7 +116,7 @@ const behaviors = {
       const timeout = window.setTimeout(() => {
         worker.terminate();
         reject(new Error("worker not responding"));
-      }, 500);
+      }, 400);
       worker.onmessage = function (_event) {
         window.clearTimeout(timeout);
         resolve(worker);
@@ -126,7 +130,6 @@ const behaviors = {
         maxSlots: 512,
         maxValue: 128,
         pulseMs: 1000,
-        settlingTimeMs: 200
       },
       Firefox: {
         listSize: 5,
@@ -134,7 +137,6 @@ const behaviors = {
         maxValue: 128,
         pulseMs: 1500,
         negotiateMs: 1500,
-        settlingTimeMs: 100
       },
       Safari: {
         listSize: 5,
@@ -142,7 +144,6 @@ const behaviors = {
         maxValue: 128,
         pulseMs: 1000,
         negotiateMs: 1500,
-        settlingTimeMs: 100
       }
     }
   },
@@ -151,7 +152,7 @@ const behaviors = {
       const source = new EventSource("events/source");
       const timeout = window.setTimeout(() => {
         resolve(source);
-      }, 100);
+      }, 200);
       source.onerror = () => {
         source.close();
         clearTimeout(timeout);
@@ -163,13 +164,19 @@ const behaviors = {
       source.readyState === EventSource.OPEN,
     destroy: (source) => source.close(),
     constants: {
+      Brave: {
+        listSize: 5,
+        maxSlots: 1350,
+        maxValue: 128,
+        pulseMs: 1200,
+        negotiateMs: 1200,
+      },
       Chrome: {
         listSize: 5,
         maxSlots: 1350,
         maxValue: 128,
         pulseMs: 500,
         negotiateMs: 1000,
-        settlingTimeMs: 200
       },
       Edge: {
         listSize: 5,
@@ -177,21 +184,18 @@ const behaviors = {
         maxValue: 128,
         pulseMs: 500,
         negotiateMs: 500,
-        settlingTimeMs: 200
       },
       Firefox: {
         listSize: 5,
         maxSlots: 512,
         maxValue: 128,
         pulseMs: 1400,
-        settlingTimeMs: 400
       },
       Safari: {
         listSize: 5,
         maxSlots: 512,
         maxValue: 128,
         pulseMs: 1400,
-        settlingTimeMs: 400
       }
     }
   }
@@ -269,6 +273,24 @@ const capture = () => {
   recordIntegerToTrace(resources.size);
 };
 
+// Remove any resources that are dead (and thus won't be kept in the pool).
+const sweepDead = async () => {
+  const t1 = Date.now();
+  console.log("sweep");
+  if (alive) {
+    console.log("alive exists");
+    const deadResources = [...resources].filter(r => !alive(r));
+    const destroyPromises = deadResources.map(r => {
+      resources.delete(r);
+      return destroy(r);
+    });
+    console.log(destroyPromises);
+    await Promise.allSettled(destroyPromises);
+  }
+  const t2 = Date.now();
+  console.log("sweep", t2 - t1);
+};
+
 // Consume up to 'max' resource slots and return number actually consumed.
 const consume = async (max) => {
   capture();
@@ -282,8 +304,10 @@ const consume = async (max) => {
       resources.add(result.value);
     }
   }
-//  capture();
-//  await sleepMs(k.settlingTimeMs);
+  if (kBrowser === "Firefox") {
+    await sleepMs(100);
+  }
+  await sweepDead();
   capture();
   return resources.size - nStart;
 };
@@ -295,14 +319,15 @@ const release = async (max) => {
     return 0;
   }
   const numberToRelease = Math.min(max, resources.size);
+  const destroyPromises = [];
   for (let i = 0; i < numberToRelease; ++i) {
     const resource = resources.values().next().value;
-    destroy(resource);
+    destroyPromises.push(destroy(resource));
     resources.delete(resource);
     capture();
   }
-//  await sleepMs(k.settlingTimeMs);
-//  capture();
+  await Promise.all(destroyPromises);
+  await sweepDead();
   return numberToRelease;
 };
 
@@ -323,36 +348,27 @@ const countValues = (values) => {
   return result;
 };
 
-// Remove any resources that are dead (and thus won't be kept in the pool).
-const sweepDead = () => {
-  const t1 = Date.now();
-  if (alive) {
-    for (let resource of resources) {
-      if (!alive(resource)) {
-        destroy(resource);
-        resources.delete(resource);
-      }
-    }
-  }
-  const t2 = Date.now();
-  console.log("sweep", t2 - t1);
-};
-
 // Return true if we have taken the sender role;
 // false if we are a receiver.
 const isSender = async () => {
   //  await release(resources.size);
   console.log("destroyed; left is ", JSON.stringify(countValues([...resources].map(r => r.readyState))));
   console.log("resources.size:", resources.size);
-  await consume(k.maxSlots + 100);
-  await sleepMs(k.negotiateMs / 2); // k.settlingTimeMs);
-  sweepDead();
+  await consume(k.maxSlots * 2); // - resources.size);
+  await sleepMs(k.negotiateMs / 2);
+  await sweepDead();
   capture();
   console.log(`${Date.now()} ${resources.size} vs ${k.maxSlots / 2}`);
   if (resources.size < k.maxSlots / 2) {
-    await release(resources.size);
+    await release(2 * k.maxSlots);
+    await sweepDead();
     return false;
   } else {
+    //if (kBrowser === "Firefox") {
+      //await sleepMs(00);
+    await consume(k.maxSlots * 2);
+    await sweepDead();
+    //}
     return true;
   }
 };
@@ -360,7 +376,9 @@ const isSender = async () => {
 // Send a big integer.
 const sendInteger = async (bigInteger, startTime) => {
   const list = bigIntegerToList(bigInteger, k.listSize, k.maxValue);
-  await consume(k.maxSlots - resources.size);
+//  if (kBrowser === "Firefox") {
+    await consume(k.maxSlots + 100);
+//  }
   let lastInteger = k.maxSlots - resources.size;
   for (let i = 0; i < k.listSize; ++i) {
     await sleepUntil(startTime + k.negotiateMs + i * k.pulseMs);
@@ -369,7 +387,7 @@ const sendInteger = async (bigInteger, startTime) => {
     // exactly `integer + 1` slots are unheld.
     const integer = 1 + list[i];
     if (true) { // (kBrowser === "Firefox" && mode === "websocket") {
-      await consume(lastInteger + 5);
+      await consume(lastInteger);
       await release(integer);
     } else {
       const delta = integer - lastInteger;
@@ -384,7 +402,7 @@ const sendInteger = async (bigInteger, startTime) => {
   if (debug) {
     log(list);
   }
-  // return list;
+   //return list;
   return bigIntegerToHex(bigInteger, kNumBits);
 };
 
@@ -393,10 +411,11 @@ const receiveInteger = async (startTime) => {
   const integerList = [];
   // Read n integers by probing for
   // unheld slots.
-  const offset = 0.5; // 0.25; // (1 - 2 * k.settlingTimeMs/k.pulseMs) / 2;
+  const offset = 0.5;
   for (let i = 0; i < k.listSize; ++i) {
     await sleepUntil(startTime + k.negotiateMs + (i + offset) * k.pulseMs);
     const integer = await probe(k.maxValue);
+    console.log("probe", integer);
     if (integer > k.maxValue || integer === 0) {
       console.log("error: illegal value");
       break;
@@ -428,10 +447,12 @@ const log = (msg, elapsedMs) => {
   window.scrollBy(0, logDiv.scrollHeight);
 };
 
+
 // When page loads
 const run = async () => {
   const bigIntegerList = [];
   const numCycles = intParam("cycles") ?? 10;
+//  const sender = Math.random() >= 0.5;
   for (let i = 0; i < numCycles; ++i) {
     capture();
     const t0 = await sleepUntilNextRoundInterval(k.negotiateMs + k.listSize * k.pulseMs);
@@ -504,6 +525,7 @@ const createAllCommandButtons = () => {
 
 // The main program.
 const main = async () => {
+  console.log("detected", kBrowser);
   window.onunload = () => release(resources.size);
   if (debug) {
     createAllCommandButtons();
