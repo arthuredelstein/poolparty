@@ -25,7 +25,9 @@ const mode = params.get("mode");
 
 // Figure out the current browser.
 const kBrowser = (() => {
-  if (navigator.userAgent.indexOf("Chrome") >= 0) {
+  if (navigator.userAgent.indexOf("Edg") >= 0) {
+    return "Edge";
+  } else if (navigator.userAgent.indexOf("Chrome") >= 0) {
     return "Chrome";
   } else if (navigator.userAgent.indexOf("Firefox") >= 0) {
     return "Firefox";
@@ -58,7 +60,7 @@ const behaviors = {
         } else {
           resolve(socket);
         }
-      }, kBrowser === "Chrome" ? 0 : 100);
+      }, kBrowser === "Chrome" ? 1 : 100);
       socket.onerror = () => {
         socket.close();
         clearTimeout(timeout);
@@ -66,26 +68,37 @@ const behaviors = {
       };
     }),
     destroy: (socket) => socket.close(),
+    alive: (socket) =>
+      socket.readyState === WebSocket.CONNECTING ||
+      socket.readyState === WebSocket.OPEN,
     constants: {
       Chrome: {
         listSize: 5,
         maxSlots: 255,
         maxValue: 128,
-        pulseMs: 150,
-        negotiateMs: 250,
-        settlingTimeMs: 50
+        pulseMs: 600,
+        negotiateMs: 600,
+        settlingTimeMs: 20
+      },
+      Edge: {
+        listSize: 5,
+        maxSlots: 255,
+        maxValue: 128,
+        pulseMs: 2000,
+        negotiateMs: 2000,
+        settlingTimeMs: 20
       },
       Firefox: {
         listSize: 5,
-        maxSlots: 260,
+        maxSlots: 200,
         maxValue: 128,
-        pulseMs: 800,
-        negotiateMs: 1200,
+        pulseMs: 1000,
+        negotiateMs: 1000,
         settlingTimeMs: 200
       },
       Safari: {
         listSize: 5,
-        maxSlots: 260,
+        maxSlots: 255,
         maxValue: 128,
         pulseMs: 800,
         negotiateMs: 1200,
@@ -106,6 +119,7 @@ const behaviors = {
       };
     }),
     destroy: (worker) => worker.terminate(),
+    alive: null,
     constants: {
       Chrome: {
         listSize: 5,
@@ -118,7 +132,7 @@ const behaviors = {
         listSize: 5,
         maxSlots: 512,
         maxValue: 128,
-        pulseMs: 1000,
+        pulseMs: 1500,
         negotiateMs: 1500,
         settlingTimeMs: 100
       },
@@ -137,21 +151,32 @@ const behaviors = {
       const source = new EventSource("events/source");
       const timeout = window.setTimeout(() => {
         resolve(source);
-      }, 800);
+      }, 100);
       source.onerror = () => {
         source.close();
         clearTimeout(timeout);
         reject(new Error("EventSource failed"));
       };
     }),
+    alive: (source) =>
+      source.readyState === EventSource.CONNECTING ||
+      source.readyState === EventSource.OPEN,
     destroy: (source) => source.close(),
     constants: {
       Chrome: {
         listSize: 5,
         maxSlots: 1350,
         maxValue: 128,
-        pulseMs: 1600,
-        negotiateMs: 3000,
+        pulseMs: 500,
+        negotiateMs: 1000,
+        settlingTimeMs: 200
+      },
+      Edge: {
+        listSize: 5,
+        maxSlots: 1350,
+        maxValue: 128,
+        pulseMs: 500,
+        negotiateMs: 500,
         settlingTimeMs: 200
       },
       Firefox: {
@@ -173,7 +198,7 @@ const behaviors = {
 };
 
 // Get the behaviors for the current mode:
-const { create, destroy, constants } = behaviors[mode];
+const { create, destroy, alive, constants } = behaviors[mode];
 
 // Read constants for current browser and mode:
 const k = constants[kBrowser];
@@ -283,23 +308,47 @@ const release = async (max) => {
 
 // Probe for unheld resource slots.
 const probe = async (max) => {
-  const consumedCount1 = await consume(max);
-  await sleepMs(10);
-  const consumedCount2 = await consume(max);
-  await sleepMs(10);
-  const consumedCount = consumedCount1 + consumedCount2;
-  await release(consumedCount);
-  return consumedCount;
+  await consume(max);
+  return await release(resources.size);
+};
+
+const countValues = (values) => {
+  const result = {};
+  for (let value of values) {
+    if (result[value] === undefined) {
+      result[value] = 0;
+    }
+    ++result[value];
+  }
+  return result;
+};
+
+// Remove any resources that are dead (and thus won't be kept in the pool).
+const sweepDead = () => {
+  const t1 = Date.now();
+  if (alive) {
+    for (let resource of resources) {
+      if (!alive(resource)) {
+        destroy(resource);
+        resources.delete(resource);
+      }
+    }
+  }
+  const t2 = Date.now();
+  console.log("sweep", t2 - t1);
 };
 
 // Return true if we have taken the sender role;
 // false if we are a receiver.
 const isSender = async () => {
-  //await release(resources.size);
-  await consume(k.maxSlots);
-  await sleepMs(k.settlingTimeMs);
+  //  await release(resources.size);
+  console.log("destroyed; left is ", JSON.stringify(countValues([...resources].map(r => r.readyState))));
+  console.log("resources.size:", resources.size);
+  await consume(k.maxSlots + 100);
+  await sleepMs(k.negotiateMs / 2); // k.settlingTimeMs);
+  sweepDead();
   capture();
-  console.log(`${resources.size} vs ${k.maxSlots / 2}`);
+  console.log(`${Date.now()} ${resources.size} vs ${k.maxSlots / 2}`);
   if (resources.size < k.maxSlots / 2) {
     await release(resources.size);
     return false;
@@ -311,7 +360,7 @@ const isSender = async () => {
 // Send a big integer.
 const sendInteger = async (bigInteger, startTime) => {
   const list = bigIntegerToList(bigInteger, k.listSize, k.maxValue);
-  //await consume(k.maxSlots - resources.size);
+  await consume(k.maxSlots - resources.size);
   let lastInteger = k.maxSlots - resources.size;
   for (let i = 0; i < k.listSize; ++i) {
     await sleepUntil(startTime + k.negotiateMs + i * k.pulseMs);
@@ -319,7 +368,7 @@ const sendInteger = async (bigInteger, startTime) => {
     // or release slots so that, for the rest of the pulse,
     // exactly `integer + 1` slots are unheld.
     const integer = 1 + list[i];
-    if (kBrowser === "Firefox" && mode === "websocket") {
+    if (true) { // (kBrowser === "Firefox" && mode === "websocket") {
       await consume(lastInteger + 5);
       await release(integer);
     } else {
@@ -344,10 +393,14 @@ const receiveInteger = async (startTime) => {
   const integerList = [];
   // Read n integers by probing for
   // unheld slots.
-  const offset = 0.25; // (1 - 2 * k.settlingTimeMs/k.pulseMs) / 2;
+  const offset = 0.5; // 0.25; // (1 - 2 * k.settlingTimeMs/k.pulseMs) / 2;
   for (let i = 0; i < k.listSize; ++i) {
     await sleepUntil(startTime + k.negotiateMs + (i + offset) * k.pulseMs);
     const integer = await probe(k.maxValue);
+    if (integer > k.maxValue || integer === 0) {
+      console.log("error: illegal value");
+      break;
+    }
     integerList.push(integer - 1);
   }
   if (debug) {
@@ -407,6 +460,9 @@ const run = async () => {
   console.log("Pulse length", k.pulseMs);
   console.log("Cycle time", k.negotiateMs + k.listSize * k.pulseMs);
   console.log("Pool size", k.maxSlots);
+  console.log(bigIntegerList.map(i => i.toString()).join(" "))
+  // Get ready to post data.
+  await sleepMs(3000);
   const response = await fetch("events/result", {
     method: "POST", cache: "no-cache",
     headers: { "Content-Type": "application/json" },
@@ -431,6 +487,7 @@ const createButtonForCommand = (commandName, commandFunction) => {
   commandButtonsDiv.appendChild(button);
 };
 
+
 // Create all the command buttons.
 const createAllCommandButtons = () => {
   createButtonForCommand("consume 1", () => consume(1));
@@ -438,6 +495,7 @@ const createAllCommandButtons = () => {
   createButtonForCommand("release 1", () => release(1));
   createButtonForCommand("release all", () => release(resources.size));
   createButtonForCommand("status", () => resources.size);
+  createButtonForCommand("readyStates", () => JSON.stringify(countValues([...resources].map(r => r.readyState))));
   createButtonForCommand("probe", () => probe(k.maxSlots));
   createButtonForCommand("is sender", () => isSender());
   createButtonForCommand("send", () => sendInteger(randomBigInteger(kNumBits), 0));
