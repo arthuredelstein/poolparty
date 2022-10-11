@@ -125,12 +125,6 @@ const behaviors = {
     destroy: (worker) => worker.terminate(),
     alive: null,
     constants: {
-      Chrome: {
-        listSize: 5,
-        maxSlots: 512,
-        maxValue: 128,
-        pulseMs: 1000,
-      },
       Firefox: {
         listSize: 5,
         maxSlots: 512,
@@ -138,13 +132,6 @@ const behaviors = {
         pulseMs: 2000,
         negotiateMs: 2000,
       },
-      Safari: {
-        listSize: 5,
-        maxSlots: 512,
-        maxValue: 128,
-        pulseMs: 1000,
-        negotiateMs: 1500,
-      }
     }
   },
   sse: {
@@ -184,12 +171,6 @@ const behaviors = {
         maxValue: 128,
         pulseMs: 1000,
         negotiateMs: 2000,
-      },
-      Firefox: {
-        listSize: 5,
-        maxSlots: 512,
-        maxValue: 128,
-        pulseMs: 1400,
       },
       Safari: {
         listSize: 5,
